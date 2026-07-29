@@ -19,6 +19,9 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
+    "lib0": "^0.2.117",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.31",
     "zod": "^3.23.8"
   },
   "devDependencies": {

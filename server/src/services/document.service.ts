@@ -1,6 +1,7 @@
 import { Role } from '@prisma/client';
 import { prisma } from '../config/database';
 import { ApiError } from '../utils/ApiError';
+import { createEmptyYDocState, decodeBase64ToBuffer, encodeBufferToBase64, isValidYjsState } from '../utils/yjs';
 
 const ROLE_RANK: Record<Role, number> = {
   VIEWER: 0,
@@ -10,6 +11,15 @@ const ROLE_RANK: Record<Role, number> = {
 
 const OWNER_SELECT = { id: true, name: true, email: true, avatarColor: true } as const;
 const COLLABORATOR_USER_SELECT = { id: true, name: true, email: true, avatarColor: true } as const;
+const SUMMARY_SELECT = {
+  id: true,
+  title: true,
+  ownerId: true,
+  isPublic: true,
+  createdAt: true,
+  updatedAt: true,
+  // content deliberately NOT selected — callers that need it use getDocumentById
+} as const;
 
 interface DocumentAccess {
   documentId: string;
@@ -74,9 +84,16 @@ export async function listDocuments(userId: string, params: ListDocumentsParams)
         params.search ? { title: { contains: params.search, mode: 'insensitive' } } : {},
       ],
     },
-    include: {
+    select: {
+      id: true,
+      title: true,
+      ownerId: true,
+      isPublic: true,
+      createdAt: true,
+      updatedAt: true,
+      // content deliberately NOT selected — it can be large and the list view doesn't need it
       owner: { select: OWNER_SELECT },
-      collaborators: { include: { user: { select: COLLABORATOR_USER_SELECT } } },
+      collaborators: { select: { userId: true, role: true, user: { select: COLLABORATOR_USER_SELECT } } },
     },
     orderBy: { [sort]: order },
   });
@@ -104,10 +121,12 @@ export async function createDocument(userId: string, title?: string) {
     data: {
       ...(trimmedTitle ? { title: trimmedTitle } : {}),
       ownerId: userId,
+      content: createEmptyYDocState(),
       collaborators: {
         create: { userId, role: 'OWNER' },
       },
     },
+    select: SUMMARY_SELECT,
   });
 
   return document;
@@ -127,7 +146,7 @@ export async function getDocumentById(userId: string, documentId: string) {
   return {
     id: document.id,
     title: document.title,
-    content: document.content ? document.content.toString('utf-8') : null,
+    content: document.content ? encodeBufferToBase64(document.content) : null,
     isPublic: document.isPublic,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
@@ -143,6 +162,7 @@ export async function updateDocumentTitle(userId: string, documentId: string, ti
   const document = await prisma.document.update({
     where: { id: documentId },
     data: { title },
+    select: SUMMARY_SELECT,
   });
 
   return document;
@@ -151,9 +171,13 @@ export async function updateDocumentTitle(userId: string, documentId: string, ti
 export async function saveDocumentContent(userId: string, documentId: string, content: string) {
   await checkDocumentAccess(userId, documentId, 'EDITOR');
 
+  if (!isValidYjsState(content)) {
+    throw ApiError.badRequest('Invalid document state');
+  }
+
   const document = await prisma.document.update({
     where: { id: documentId },
-    data: { content: Buffer.from(content, 'utf-8') },
+    data: { content: decodeBase64ToBuffer(content) },
     select: { updatedAt: true },
   });
 

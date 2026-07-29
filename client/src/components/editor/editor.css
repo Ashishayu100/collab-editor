@@ -37,6 +37,18 @@
   margin: 0.75em 0;
 }
 
+.ProseMirror ul {
+  list-style: disc;
+}
+
+.ProseMirror ol {
+  list-style: decimal;
+}
+
+.ProseMirror li p {
+  margin: 0.25em 0;
+}
+
 .ProseMirror ul[data-type='taskList'] {
   list-style: none;
   padding-left: 0.25em;

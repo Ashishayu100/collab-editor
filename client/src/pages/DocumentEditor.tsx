@@ -1,12 +1,8 @@
-import type { JSONContent } from '@tiptap/core';
 import { ArrowLeft, Check, Loader2, Share2 } from 'lucide-react';
-import { KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { Editor } from '../components/editor/Editor';
-import { useAuthStore } from '../stores/authStore';
+import { Editor, EditorHandle } from '../components/editor/Editor';
 import { SaveStatus, useDocumentStore } from '../stores/documentStore';
-
-const AUTOSAVE_DELAY_MS = 2000;
 
 function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry: () => void }) {
   if (status === 'saving') {
@@ -56,37 +52,19 @@ function EditorSkeleton() {
 export default function DocumentEditor() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const {
-    currentDocument,
-    isLoading,
-    error,
-    saveStatus,
-    fetchDocument,
-    saveContent,
-    updateTitle,
-    clearCurrentDocument,
-  } = useDocumentStore();
+  const { currentDocument, isLoading, error, saveStatus, fetchDocument, updateTitle, clearCurrentDocument } =
+    useDocumentStore();
 
   const [titleDraft, setTitleDraft] = useState('');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isTitleSaving, setIsTitleSaving] = useState(false);
 
-  const contentRef = useRef<JSONContent | null>(null);
-  const isDirtyRef = useRef(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const documentIdRef = useRef<string | undefined>(id);
-  documentIdRef.current = id;
+  const editorRef = useRef<EditorHandle>(null);
 
   useEffect(() => {
     if (!id) return undefined;
     void fetchDocument(id);
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      if (isDirtyRef.current && contentRef.current) {
-        void saveContent(id, JSON.stringify(contentRef.current));
-      }
-      contentRef.current = null;
-      isDirtyRef.current = false;
       clearCurrentDocument();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,56 +73,6 @@ export default function DocumentEditor() {
   useEffect(() => {
     setTitleDraft(currentDocument?.title ?? '');
   }, [currentDocument?.id, currentDocument?.title]);
-
-  const performSave = useCallback(() => {
-    const docId = documentIdRef.current;
-    const content = contentRef.current;
-    if (!docId || !content) return;
-    isDirtyRef.current = false;
-    saveContent(docId, JSON.stringify(content)).catch(() => {
-      // saveStatus is already reflected as 'error' by the store
-    });
-  }, [saveContent]);
-
-  function handleContentChange(content: JSONContent) {
-    contentRef.current = content;
-    isDirtyRef.current = true;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(performSave, AUTOSAVE_DELAY_MS);
-  }
-
-  useEffect(() => {
-    function handleKeyDown(e: globalThis.KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        if (debounceRef.current) clearTimeout(debounceRef.current);
-        performSave();
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [performSave]);
-
-  useEffect(() => {
-    function handleBeforeUnload() {
-      const docId = documentIdRef.current;
-      const content = contentRef.current;
-      if (!docId || !content || !isDirtyRef.current) return;
-
-      const token = useAuthStore.getState().accessToken;
-      void fetch(`/api/documents/${docId}/content`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ content: JSON.stringify(content) }),
-        keepalive: true,
-      });
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, []);
 
   function startEditingTitle() {
     setTitleDraft(currentDocument?.title ?? '');
@@ -174,16 +102,6 @@ export default function DocumentEditor() {
       setIsEditingTitle(false);
     }
   }
-
-  const initialContent = useMemo<JSONContent | undefined>(() => {
-    if (!currentDocument?.content) return undefined;
-    try {
-      return JSON.parse(currentDocument.content) as JSONContent;
-    } catch {
-      return undefined;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentDocument?.id]);
 
   if (!id) {
     return <Navigate to="/dashboard" replace />;
@@ -241,7 +159,7 @@ export default function DocumentEditor() {
 
         <div className="flex shrink-0 items-center gap-4">
           <div key={saveStatus} className="fade-in">
-            <SaveIndicator status={saveStatus} onRetry={performSave} />
+            <SaveIndicator status={saveStatus} onRetry={() => editorRef.current?.retrySave()} />
           </div>
           <button
             type="button"
@@ -256,10 +174,10 @@ export default function DocumentEditor() {
       <div className="min-h-0 flex-1">
         <Editor
           key={currentDocument.id}
+          ref={editorRef}
           documentId={currentDocument.id}
-          initialContent={initialContent}
+          initialContent={currentDocument.content}
           editable={currentDocument.role !== 'VIEWER'}
-          onSave={handleContentChange}
         />
       </div>
     </div>

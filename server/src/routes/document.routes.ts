@@ -48,7 +48,7 @@ const updateTitleSchema = z.object({
 
 const saveContentSchema = z.object({
   body: z.object({
-    content: z.string(),
+    content: z.string().min(1, 'content is required'),
   }),
   query: z.object({}).optional(),
   params: z.object({ id: z.string().min(1) }),

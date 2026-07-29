@@ -18,9 +18,11 @@ import {
   Minus,
   Pilcrow,
   Quote,
+  Redo2,
   SquareCode,
   Strikethrough,
   Underline as UnderlineIcon,
+  Undo2,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '../../lib/utils';
@@ -35,20 +37,22 @@ interface ToolbarButtonProps {
   shortcut?: string;
   icon: LucideIcon;
   isActive?: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }
 
-function ToolbarButton({ label, shortcut, icon: Icon, isActive, onClick }: ToolbarButtonProps) {
+function ToolbarButton({ label, shortcut, icon: Icon, isActive, disabled, onClick }: ToolbarButtonProps) {
   return (
     <button
       type="button"
       title={shortcut ? `${label} (${shortcut})` : label}
       aria-label={label}
       aria-pressed={isActive}
+      disabled={disabled}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className={cn(
-        'flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-gray-600 transition-colors duration-150 hover:bg-gray-200',
+        'flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-gray-600 transition-colors duration-150 hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
         isActive && 'bg-blue-100 text-primary hover:bg-blue-100'
       )}
     >
@@ -87,11 +91,30 @@ export function Toolbar({ editor }: ToolbarProps) {
       codeBlock: editor.isActive('codeBlock'),
       link: editor.isActive('link'),
       linkHref: (editor.getAttributes('link').href as string | undefined) ?? '',
+      canUndo: editor.can().undo(),
+      canRedo: editor.can().redo(),
     }),
   });
 
   return (
     <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-[#F9FAFB] px-3 py-1.5">
+      <ToolbarButton
+        label="Undo"
+        shortcut="Ctrl+Z"
+        icon={Undo2}
+        disabled={!state.canUndo}
+        onClick={() => editor.chain().focus().undo().run()}
+      />
+      <ToolbarButton
+        label="Redo"
+        shortcut="Ctrl+Shift+Z"
+        icon={Redo2}
+        disabled={!state.canRedo}
+        onClick={() => editor.chain().focus().redo().run()}
+      />
+
+      <Divider />
+
       <ToolbarButton
         label="Bold"
         shortcut="Ctrl+B"

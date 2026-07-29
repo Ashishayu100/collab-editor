@@ -45,6 +45,7 @@ export interface DocumentListItem {
 export interface DocumentDetail {
   id: string;
   title: string;
+  /** Base64-encoded Yjs document state (Y.encodeStateAsUpdate), or null for legacy Day 2 documents. */
   content: string | null;
   isPublic: boolean;
   createdAt: string;
