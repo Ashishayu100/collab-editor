@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  password      String   // bcrypt hashed
+  avatarColor   String   @default("#3B82F6") // random color assigned at signup for cursor/presence
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations (will be used later)
+  ownedDocuments    Document[]       @relation("DocumentOwner")
+  collaborations    Collaborator[]
+  comments          Comment[]
+
+  @@map("users")
+}
+
+model Document {
+  id            String   @id @default(cuid())
+  title         String   @default("Untitled Document")
+  content       Bytes?   // Yjs document state as binary (will be used from Day 6)
+  ownerId       String
+  isPublic      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  owner         User            @relation("DocumentOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  collaborators Collaborator[]
+  versions      DocumentVersion[]
+  comments      Comment[]
+
+  @@map("documents")
+}
+
+model Collaborator {
+  id            String   @id @default(cuid())
+  documentId    String
+  userId        String
+  role          Role     @default(EDITOR)
+  addedAt       DateTime @default(now())
+
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+  @@map("collaborators")
+}
+
+model DocumentVersion {
+  id            String   @id @default(cuid())
+  documentId    String
+  content       Bytes    // Yjs state snapshot
+  title         String
+  createdBy     String
+  createdAt     DateTime @default(now())
+
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_versions")
+}
+
+model Comment {
+  id            String   @id @default(cuid())
+  documentId    String
+  userId        String
+  content       String
+  selection     Json?    // text range the comment is anchored to
+  parentId      String?  // for threaded replies
+  resolved      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent        Comment? @relation("CommentThread", fields: [parentId], references: [id])
+  replies       Comment[] @relation("CommentThread")
+
+  @@map("comments")
+}
+
+enum Role {
+  VIEWER
+  EDITOR
+  OWNER
+}

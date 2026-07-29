@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+.env
+!.env.example
+*.log
+.DS_Store
+coverage/
+
+# Prisma
+server/prisma/migrations/**/migration.sql.bak
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# OS
+Thumbs.db
