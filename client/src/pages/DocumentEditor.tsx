@@ -2,34 +2,50 @@ import { ArrowLeft, Check, Loader2, Share2 } from 'lucide-react';
 import { KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Editor, EditorHandle } from '../components/editor/Editor';
+import { ConnectionStatus } from '../lib/WebSocketProvider';
 import { SaveStatus, useDocumentStore } from '../stores/documentStore';
 
-function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry: () => void }) {
-  if (status === 'saving') {
+function ConnectionIndicator({ status, saveStatus }: { status: ConnectionStatus; saveStatus: SaveStatus }) {
+  if (saveStatus === 'saving') {
     return (
       <span className="flex items-center gap-1.5 text-xs text-gray-500">
         <Loader2 size={14} className="animate-spin" /> Saving...
       </span>
     );
   }
-  if (status === 'saved') {
+  if (saveStatus === 'saved') {
     return (
       <span className="flex items-center gap-1.5 text-xs text-green-600">
         <Check size={14} /> Saved
       </span>
     );
   }
-  if (status === 'error') {
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-red-600">
-        Save failed
-        <button type="button" onClick={onRetry} className="underline hover:no-underline">
-          Retry
-        </button>
-      </span>
-    );
+
+  switch (status) {
+    case ConnectionStatus.CONNECTED:
+      return (
+        <span className="flex items-center gap-1.5 text-xs text-green-600">
+          <span className="h-2 w-2 rounded-full bg-green-500" /> Connected
+        </span>
+      );
+    case ConnectionStatus.CONNECTING:
+      return (
+        <span className="flex items-center gap-1.5 text-xs text-amber-600">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /> Connecting...
+        </span>
+      );
+    case ConnectionStatus.ERROR:
+    case ConnectionStatus.DISCONNECTED:
+    default:
+      return (
+        <span className="flex flex-col items-end text-xs text-red-600">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-red-500" /> Offline
+          </span>
+          <span className="text-[10px] text-gray-400">Changes saved locally</span>
+        </span>
+      );
   }
-  return null;
 }
 
 function EditorSkeleton() {
@@ -52,8 +68,16 @@ function EditorSkeleton() {
 export default function DocumentEditor() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { currentDocument, isLoading, error, saveStatus, fetchDocument, updateTitle, clearCurrentDocument } =
-    useDocumentStore();
+  const {
+    currentDocument,
+    isLoading,
+    error,
+    saveStatus,
+    connectionStatus,
+    fetchDocument,
+    updateTitle,
+    clearCurrentDocument,
+  } = useDocumentStore();
 
   const [titleDraft, setTitleDraft] = useState('');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -158,8 +182,8 @@ export default function DocumentEditor() {
         </div>
 
         <div className="flex shrink-0 items-center gap-4">
-          <div key={saveStatus} className="fade-in">
-            <SaveIndicator status={saveStatus} onRetry={() => editorRef.current?.retrySave()} />
+          <div key={saveStatus === 'saved' ? 'saved' : connectionStatus} className="fade-in">
+            <ConnectionIndicator status={connectionStatus} saveStatus={saveStatus} />
           </div>
           <button
             type="button"

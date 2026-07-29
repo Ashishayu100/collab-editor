@@ -1,10 +1,12 @@
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as Y from 'yjs';
+import { WebSocketProvider, WebSocketProviderStats } from '../../lib/WebSocketProvider';
 
 interface YjsDebugPanelProps {
   ydoc: Y.Doc;
   documentId: string;
+  provider: WebSocketProvider;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -16,11 +18,13 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function YjsDebugPanel({ ydoc, documentId }: YjsDebugPanelProps) {
+export function YjsDebugPanel({ ydoc, documentId, provider }: YjsDebugPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [stateSize, setStateSize] = useState(() => Y.encodeStateAsUpdate(ydoc).length);
   const [fragmentChildCount, setFragmentChildCount] = useState(() => ydoc.getXmlFragment('default').length);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState(provider.status);
+  const [wsStats, setWsStats] = useState<WebSocketProviderStats>(provider.stats);
 
   useEffect(() => {
     function handleUpdate() {
@@ -34,6 +38,17 @@ export function YjsDebugPanel({ ydoc, documentId }: YjsDebugPanelProps) {
       ydoc.off('update', handleUpdate);
     };
   }, [ydoc]);
+
+  useEffect(() => {
+    setConnectionStatus(provider.status);
+    setWsStats(provider.stats);
+    const unsubStatus = provider.onStatusChange(setConnectionStatus);
+    const unsubStats = provider.onStatsChange(setWsStats);
+    return () => {
+      unsubStatus();
+      unsubStats();
+    };
+  }, [provider]);
 
   function openInNewTab() {
     window.open(window.location.href, '_blank');
@@ -73,6 +88,14 @@ export function YjsDebugPanel({ ydoc, documentId }: YjsDebugPanelProps) {
         <Row label="State size" value={`${stateSize} bytes`} />
         <Row label="Fragment children" value={String(fragmentChildCount)} />
         <Row label="Last update" value={lastUpdate ? lastUpdate.toLocaleTimeString() : '—'} />
+        <Row label="WS status" value={connectionStatus} />
+        <Row label="Reconnect attempts" value={String(wsStats.reconnectAttempts)} />
+        <Row label="Msgs sent" value={String(wsStats.messagesSent)} />
+        <Row label="Msgs received" value={String(wsStats.messagesReceived)} />
+        <Row
+          label="Last message"
+          value={wsStats.lastMessageAt ? wsStats.lastMessageAt.toLocaleTimeString() : '—'}
+        />
       </dl>
       <button
         type="button"

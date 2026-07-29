@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { documentApi, DocumentDetail, DocumentListItem, DocumentSummary } from '../api/documents';
 import { getErrorMessage } from '../lib/utils';
+import { ConnectionStatus } from '../lib/WebSocketProvider';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -10,6 +11,7 @@ interface DocumentState {
   isLoading: boolean;
   isSaving: boolean;
   saveStatus: SaveStatus;
+  connectionStatus: ConnectionStatus;
   error: string | null;
 
   fetchDocuments: (search?: string) => Promise<void>;
@@ -19,6 +21,7 @@ interface DocumentState {
   saveContent: (id: string, content: string) => Promise<void>;
   deleteDocument: (id: string) => Promise<void>;
   setSaveStatus: (status: SaveStatus) => void;
+  setConnectionStatus: (status: ConnectionStatus) => void;
   clearCurrentDocument: () => void;
 }
 
@@ -28,6 +31,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   isLoading: false,
   isSaving: false,
   saveStatus: 'idle',
+  connectionStatus: ConnectionStatus.DISCONNECTED,
   error: null,
 
   fetchDocuments: async (search) => {
@@ -97,5 +101,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   setSaveStatus: (status) => set({ saveStatus: status }),
 
-  clearCurrentDocument: () => set({ currentDocument: null, saveStatus: 'idle', error: null }),
+  setConnectionStatus: (status) => set({ connectionStatus: status }),
+
+  clearCurrentDocument: () =>
+    set({
+      currentDocument: null,
+      saveStatus: 'idle',
+      connectionStatus: ConnectionStatus.DISCONNECTED,
+      error: null,
+    }),
 }));

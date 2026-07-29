@@ -1,10 +1,12 @@
 import cors from 'cors';
 import express from 'express';
+import { createServer } from 'http';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 import authRoutes from './routes/auth.routes';
 import documentRoutes from './routes/document.routes';
+import { CollabWebSocketServer } from './websocket/WebSocketServer';
 
 const app = express();
 
@@ -27,6 +29,10 @@ app.use('/api/documents', documentRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(env.PORT, () => {
+const httpServer = createServer(app);
+new CollabWebSocketServer(httpServer);
+
+httpServer.listen(env.PORT, () => {
   console.log(`Server listening on http://localhost:${env.PORT}`);
+  console.log(`WebSocket server ready on ws://localhost:${env.PORT}/ws`);
 });

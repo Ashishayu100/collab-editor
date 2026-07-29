@@ -16,9 +16,11 @@ import Typography from '@tiptap/extension-typography';
 import Underline from '@tiptap/extension-underline';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { WifiOff } from 'lucide-react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { applyYDocState, encodeYDocState } from '../../lib/yjs';
+import { ConnectionStatus, WebSocketProvider } from '../../lib/WebSocketProvider';
 import { useAuthStore } from '../../stores/authStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { Toolbar } from './Toolbar';
@@ -26,6 +28,8 @@ import { YjsDebugPanel } from './YjsDebugPanel';
 import './editor.css';
 
 const AUTOSAVE_DELAY_MS = 2000;
+/** Only fall back to REST auto-save once the WebSocket has been down this long. */
+const OFFLINE_FALLBACK_THRESHOLD_MS = 10000;
 
 export interface EditorProps {
   documentId: string;
@@ -36,6 +40,7 @@ export interface EditorProps {
 
 export interface EditorHandle {
   retrySave: () => void;
+  retryConnection: () => void;
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
@@ -43,6 +48,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   ref
 ) {
   const saveContent = useDocumentStore((state) => state.saveContent);
+  const setConnectionStatus = useDocumentStore((state) => state.setConnectionStatus);
 
   const ydoc = useMemo(() => {
     const doc = new Y.Doc();
@@ -56,6 +62,47 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     return doc;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentId]);
+
+  // The WebSocket sync protocol keeps this Y.Doc up to date in real time; the server
+  // persists to Postgres on its own schedule. REST auto-save only exists as an offline
+  // fallback (see disconnectedSinceRef below) and for the Ctrl+S / unload safety nets.
+  //
+  // Provider construction happens inside an effect (not useMemo) because its constructor
+  // opens a real WebSocket connection. StrictMode's dev double-render discards a useMemo
+  // factory's first result but still executes it, which would leak a live socket; an
+  // effect's own synchronous cleanup correctly tears down the discarded instance instead.
+  const [provider, setProvider] = useState<WebSocketProvider | null>(null);
+
+  useEffect(() => {
+    const p = new WebSocketProvider(ydoc, documentId, () => useAuthStore.getState().accessToken ?? '');
+    setProvider(p);
+    return () => {
+      p.destroy();
+    };
+  }, [ydoc, documentId]);
+
+  const [connectionStatus, setLocalConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
+
+  useEffect(() => {
+    setConnectionStatus(connectionStatus);
+  }, [connectionStatus, setConnectionStatus]);
+
+  useEffect(() => {
+    if (!provider) return;
+    setLocalConnectionStatus(provider.status);
+    return provider.onStatusChange(setLocalConnectionStatus);
+  }, [provider]);
+
+  // Tracks how long the WebSocket has been down, so the REST fallback only kicks in
+  // after a real outage rather than on every brief reconnect blip.
+  const disconnectedSinceRef = useRef<number | null>(Date.now());
+  useEffect(() => {
+    if (connectionStatus === ConnectionStatus.CONNECTED) {
+      disconnectedSinceRef.current = null;
+    } else if (disconnectedSinceRef.current === null) {
+      disconnectedSinceRef.current = Date.now();
+    }
+  }, [connectionStatus]);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDirtyRef = useRef(false);
@@ -80,8 +127,9 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         isDirtyRef.current = true;
         flushSave();
       },
+      retryConnection: () => provider?.retryConnection(),
     }),
-    [flushSave]
+    [flushSave, provider]
   );
 
   const editor = useEditor(
@@ -121,10 +169,16 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       editable,
       immediatelyRender: false,
       onUpdate: ({ transaction }) => {
-        // Skip transactions that originated from Yjs itself (e.g. the initial state load)
-        // so we don't schedule a save for content we just loaded from the server.
+        // Skip transactions that originated from Yjs itself (e.g. a remote update applied
+        // via the WebSocket provider, or the initial state load) so we don't schedule a
+        // fallback save for content we didn't just type locally.
         if (isChangeOrigin(transaction)) return;
-        scheduleSave();
+
+        const disconnectedSince = disconnectedSinceRef.current;
+        const isLongOutage = disconnectedSince !== null && Date.now() - disconnectedSince > OFFLINE_FALLBACK_THRESHOLD_MS;
+        if (isLongOutage) {
+          scheduleSave();
+        }
       },
     },
     [ydoc]
@@ -140,6 +194,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
+        isDirtyRef.current = true;
         if (debounceRef.current) clearTimeout(debounceRef.current);
         flushSave();
       }
@@ -150,7 +205,6 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
 
   useEffect(() => {
     function handleBeforeUnload() {
-      if (!isDirtyRef.current) return;
       const token = useAuthStore.getState().accessToken;
       void fetch(`/api/documents/${documentId}/content`, {
         method: 'PATCH',
@@ -192,12 +246,25 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   return (
     <div className="flex h-full flex-col">
       <Toolbar editor={editor} />
+      {connectionStatus === ConnectionStatus.ERROR && (
+        <div className="flex items-center justify-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <WifiOff size={16} />
+          <span>Connection lost. Your changes are saved locally and will sync when reconnected.</span>
+          <button
+            type="button"
+            onClick={() => provider?.retryConnection()}
+            className="rounded bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 transition-colors duration-150 hover:bg-amber-200"
+          >
+            Retry connection
+          </button>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[720px] px-8 py-10">
           <EditorContent editor={editor} />
         </div>
       </div>
-      {import.meta.env.DEV && <YjsDebugPanel ydoc={ydoc} documentId={documentId} />}
+      {import.meta.env.DEV && provider && <YjsDebugPanel ydoc={ydoc} documentId={documentId} provider={provider} />}
     </div>
   );
 });
