@@ -1,7 +1,14 @@
 import { Role } from '@prisma/client';
 import { prisma } from '../config/database';
 import { ApiError } from '../utils/ApiError';
-import { createEmptyYDocState, decodeBase64ToBuffer, encodeBufferToBase64, isValidYjsState } from '../utils/yjs';
+import {
+  createEmptyYDocState,
+  decodeBase64ToBuffer,
+  encodeBufferToBase64,
+  isValidYjsState,
+  mergeYjsState,
+} from '../utils/yjs';
+import { getWebSocketServer } from '../websocket/registry';
 
 const ROLE_RANK: Record<Role, number> = {
   VIEWER: 0,
@@ -168,6 +175,14 @@ export async function updateDocumentTitle(userId: string, documentId: string, ti
   return document;
 }
 
+/**
+ * REST fallback save — used when a client's WebSocket is down but it still has network
+ * access (e.g. the server restarted, or the beforeunload/offline-interval safety nets in
+ * the editor). Never overwrites: if a live WebSocket room exists for this document, the
+ * incoming state is fed into that room's Y.Doc (its own save cycle then persists the merged
+ * result); otherwise it's merged directly against whatever is currently in Postgres via
+ * Y.applyUpdate, which is commutative regardless of arrival order.
+ */
 export async function saveDocumentContent(userId: string, documentId: string, content: string) {
   await checkDocumentAccess(userId, documentId, 'EDITOR');
 
@@ -175,9 +190,21 @@ export async function saveDocumentContent(userId: string, documentId: string, co
     throw ApiError.badRequest('Invalid document state');
   }
 
+  const incoming = decodeBase64ToBuffer(content);
+  const appliedToLiveRoom = getWebSocketServer()?.applyExternalUpdate(documentId, incoming) ?? false;
+
+  if (appliedToLiveRoom) {
+    return { updatedAt: new Date() };
+  }
+
+  const existing = await prisma.document.findUnique({
+    where: { id: documentId },
+    select: { content: true },
+  });
+
   const document = await prisma.document.update({
     where: { id: documentId },
-    data: { content: decodeBase64ToBuffer(content) },
+    data: { content: mergeYjsState(existing?.content ?? null, incoming) },
     select: { updatedAt: true },
   });
 

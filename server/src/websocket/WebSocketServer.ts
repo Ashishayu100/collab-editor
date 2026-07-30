@@ -16,10 +16,16 @@ import { checkDocumentAccess } from '../services/document.service';
 import { createVersion, shouldAutoSnapshot } from '../services/versionService';
 import { verifyAccessToken } from '../utils/jwt';
 
+// Message type registry (shared with client/src/lib/WebSocketProvider.ts):
+//   0 = Yjs sync (sync step 1 / sync step 2 / update, per y-protocols/sync)
+//   1 = awareness (cursors, presence, "typing" flag)
+//   2 = save-confirmed (server -> client only, sent after a debounced/periodic DB save)
+//   3 = ping/pong (latency probe — echoed back verbatim, no decoding needed)
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
   SAVE_CONFIRMED = 2, // server -> client only
+  PING = 3,
 }
 
 const SAVE_DEBOUNCE_MS = 5000;
@@ -307,6 +313,13 @@ export class CollabWebSocketServer {
         applyAwarenessUpdate(room.awareness, update, client.ws);
         break;
       }
+      case MessageType.PING: {
+        // Echo the exact bytes back so the client can measure round-trip latency.
+        if (client.ws.readyState === WebSocket.OPEN) {
+          client.ws.send(data);
+        }
+        break;
+      }
       default:
         break;
     }
@@ -395,6 +408,25 @@ export class CollabWebSocketServer {
     });
 
     restoredDoc.destroy();
+    return true;
+  }
+
+  /**
+   * Apply a Yjs state received out-of-band (the REST content-save fallback used when a
+   * client's WebSocket is down) into a live room, if one exists, via the room's own Y.Doc —
+   * so it flows through the normal update pipeline (broadcast to connected clients, scheduled
+   * save) exactly like any other edit, and later merges are commutative regardless of arrival
+   * order. Returns whether a live room absorbed it; if not, the caller must persist directly
+   * since nobody has this document open over WebSocket right now.
+   */
+  public applyExternalUpdate(documentId: string, state: Buffer): boolean {
+    const room = this.rooms.get(documentId);
+    if (!room) return false;
+
+    room.ydoc.transact(() => {
+      Y.applyUpdate(room.ydoc, new Uint8Array(state));
+    }, 'rest-fallback');
+
     return true;
   }
 

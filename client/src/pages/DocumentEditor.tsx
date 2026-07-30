@@ -25,27 +25,59 @@ function ConnectionIndicator({
   saveStatus,
   isSavePending,
   lastSavedAt,
+  pendingChangeCount,
+  reconnectAttempts,
   onRetrySave,
+  onRetryConnection,
 }: {
   status: ConnectionStatus;
   saveStatus: SaveStatus;
   isSavePending: boolean;
   lastSavedAt: Date | null;
+  pendingChangeCount: number;
+  reconnectAttempts: number;
   onRetrySave: () => void;
+  onRetryConnection: () => void;
 }) {
-  // Being offline overrides everything else — no save state matters if we're not connected.
-  if (status === ConnectionStatus.DISCONNECTED || status === ConnectionStatus.ERROR) {
+  if (status === ConnectionStatus.OFFLINE) {
     return (
       <span className="flex flex-col items-end text-xs text-red-600">
         <span className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-red-500" /> Offline
+          <span className="h-2 w-2 rounded-full bg-red-500" /> Offline — editing locally
         </span>
-        <span className="text-[10px] text-gray-400">Changes will sync when reconnected</span>
+        <span className="text-[10px] text-gray-400">
+          {pendingChangeCount > 0 ? `${pendingChangeCount} edit(s) pending sync` : 'Changes saved locally'}
+        </span>
       </span>
     );
   }
 
-  if (status === ConnectionStatus.CONNECTING) {
+  if (status === ConnectionStatus.FAILED) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-red-600">
+        <span className="h-2 w-2 rounded-full bg-red-500" /> Connection failed
+        <button type="button" onClick={onRetryConnection} className="underline hover:no-underline">
+          Retry
+        </button>
+      </span>
+    );
+  }
+
+  if (status === ConnectionStatus.DISCONNECTED || status === ConnectionStatus.RECONNECTING) {
+    return (
+      <span className="flex flex-col items-end text-xs text-orange-600">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-orange-500" /> Reconnecting
+          {reconnectAttempts > 0 ? ` (attempt ${reconnectAttempts})` : '…'}
+        </span>
+        <span className="text-[10px] text-gray-400">
+          {pendingChangeCount > 0 ? `${pendingChangeCount} edit(s) pending sync` : 'Changes will sync when reconnected'}
+        </span>
+      </span>
+    );
+  }
+
+  if (status === ConnectionStatus.CONNECTING || status === ConnectionStatus.SYNCING) {
     return (
       <span className="flex items-center gap-1.5 text-xs text-amber-600">
         <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /> Connecting...
@@ -116,6 +148,8 @@ export default function DocumentEditor() {
     awareness,
     isSavePending,
     lastSavedAt,
+    pendingChangeCount,
+    reconnectAttempts,
     fetchDocument,
     updateTitle,
     clearCurrentDocument,
@@ -232,7 +266,10 @@ export default function DocumentEditor() {
               saveStatus={saveStatus}
               isSavePending={isSavePending}
               lastSavedAt={lastSavedAt}
+              pendingChangeCount={pendingChangeCount}
+              reconnectAttempts={reconnectAttempts}
               onRetrySave={() => editorRef.current?.retrySave()}
+              onRetryConnection={() => editorRef.current?.retryConnection()}
             />
           </div>
           <button

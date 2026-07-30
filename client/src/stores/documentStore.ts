@@ -19,6 +19,10 @@ interface DocumentState {
   isSavePending: boolean;
   /** Timestamp of the last server-confirmed save, from the WebSocket save-confirmed message. */
   lastSavedAt: Date | null;
+  /** Local doc updates seen since the last save-confirmed — a proxy for "unsynced edit count". */
+  pendingChangeCount: number;
+  /** How many reconnect attempts the WebSocketProvider has made since the last successful connect. */
+  reconnectAttempts: number;
   error: string | null;
 
   fetchDocuments: (search?: string) => Promise<void>;
@@ -30,7 +34,8 @@ interface DocumentState {
   setSaveStatus: (status: SaveStatus) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setAwareness: (awareness: Awareness | null) => void;
-  setSaveIndicatorState: (state: { pending: boolean; lastSavedAt: Date | null }) => void;
+  setSaveIndicatorState: (state: { pending: boolean; lastSavedAt: Date | null; pendingCount: number }) => void;
+  setReconnectAttempts: (attempts: number) => void;
   clearCurrentDocument: () => void;
 }
 
@@ -44,6 +49,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   awareness: null,
   isSavePending: false,
   lastSavedAt: null,
+  pendingChangeCount: 0,
+  reconnectAttempts: 0,
   error: null,
 
   fetchDocuments: async (search) => {
@@ -117,7 +124,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   setAwareness: (awareness) => set({ awareness }),
 
-  setSaveIndicatorState: ({ pending, lastSavedAt }) => set({ isSavePending: pending, lastSavedAt }),
+  setSaveIndicatorState: ({ pending, lastSavedAt, pendingCount }) =>
+    set({ isSavePending: pending, lastSavedAt, pendingChangeCount: pendingCount }),
+
+  setReconnectAttempts: (attempts) => set({ reconnectAttempts: attempts }),
 
   clearCurrentDocument: () =>
     set({
@@ -127,6 +137,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
       awareness: null,
       isSavePending: false,
       lastSavedAt: null,
+      pendingChangeCount: 0,
+      reconnectAttempts: 0,
       error: null,
     }),
 }));

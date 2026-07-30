@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { ToastContainer } from './components/ui/ToastContainer';
 import { useAuth } from './hooks/useAuth';
 import Dashboard from './pages/Dashboard';
 import DocumentEditor from './pages/DocumentEditor';
@@ -16,26 +17,29 @@ export default function App() {
   }, []);
 
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/signup" element={<Signup />} />
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <Dashboard />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/document/:id"
-        element={
-          <ProtectedRoute>
-            <DocumentEditor />
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/document/:id"
+          element={
+            <ProtectedRoute>
+              <DocumentEditor />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+      <ToastContainer />
+    </>
   );
 }

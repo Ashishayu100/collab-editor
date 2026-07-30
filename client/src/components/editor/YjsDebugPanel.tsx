@@ -1,30 +1,40 @@
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import * as Y from 'yjs';
-import { WebSocketProvider, WebSocketProviderStats } from '../../lib/WebSocketProvider';
+import { SaveIndicatorState, WebSocketProvider, WebSocketProviderStats } from '../../lib/WebSocketProvider';
 
 interface YjsDebugPanelProps {
   ydoc: Y.Doc;
   documentId: string;
   provider: WebSocketProvider;
+  indexedDbSynced: boolean;
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function latencyColor(latencyMs: number | null): string {
+  if (latencyMs === null) return 'text-gray-400';
+  if (latencyMs < 100) return 'text-green-400';
+  if (latencyMs < 500) return 'text-amber-400';
+  return 'text-orange-400';
+}
+
+function Row({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
   return (
     <div className="flex items-center justify-between gap-2">
       <dt className="text-gray-400">{label}</dt>
-      <dd className="truncate text-gray-100">{value}</dd>
+      <dd className={`truncate ${valueClassName ?? 'text-gray-100'}`}>{value}</dd>
     </div>
   );
 }
 
-export function YjsDebugPanel({ ydoc, documentId, provider }: YjsDebugPanelProps) {
+export function YjsDebugPanel({ ydoc, documentId, provider, indexedDbSynced }: YjsDebugPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [stateSize, setStateSize] = useState(() => Y.encodeStateAsUpdate(ydoc).length);
   const [fragmentChildCount, setFragmentChildCount] = useState(() => ydoc.getXmlFragment('default').length);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [connectionStatus, setConnectionStatus] = useState(provider.status);
   const [wsStats, setWsStats] = useState<WebSocketProviderStats>(provider.stats);
+  const [latency, setLatency] = useState<number | null>(provider.latency);
+  const [saveState, setSaveState] = useState<SaveIndicatorState>(provider.saveState);
 
   useEffect(() => {
     function handleUpdate() {
@@ -42,11 +52,17 @@ export function YjsDebugPanel({ ydoc, documentId, provider }: YjsDebugPanelProps
   useEffect(() => {
     setConnectionStatus(provider.status);
     setWsStats(provider.stats);
+    setLatency(provider.latency);
+    setSaveState(provider.saveState);
     const unsubStatus = provider.onStatusChange(setConnectionStatus);
     const unsubStats = provider.onStatsChange(setWsStats);
+    const unsubLatency = provider.onLatencyChange(setLatency);
+    const unsubSaveState = provider.onSaveStateChange(setSaveState);
     return () => {
       unsubStatus();
       unsubStats();
+      unsubLatency();
+      unsubSaveState();
     };
   }, [provider]);
 
@@ -95,6 +111,21 @@ export function YjsDebugPanel({ ydoc, documentId, provider }: YjsDebugPanelProps
         <Row
           label="Last message"
           value={wsStats.lastMessageAt ? wsStats.lastMessageAt.toLocaleTimeString() : '—'}
+        />
+        <Row
+          label="Latency"
+          value={latency !== null ? `${latency}ms` : '—'}
+          valueClassName={latencyColor(latency)}
+        />
+        <Row
+          label="IndexedDB"
+          value={indexedDbSynced ? 'synced' : 'loading…'}
+          valueClassName={indexedDbSynced ? 'text-green-400' : 'text-amber-400'}
+        />
+        <Row
+          label="Pending changes"
+          value={String(saveState.pendingCount)}
+          valueClassName={saveState.pendingCount > 0 ? 'text-amber-400' : 'text-gray-100'}
         />
       </dl>
       <button
