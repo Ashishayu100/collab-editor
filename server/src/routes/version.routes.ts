@@ -30,8 +30,10 @@ const versionIdParamSchema = z.object({
   }),
 });
 
-const documentIdParamSchema = z.object({
-  body: z.object({}).optional(),
+const createVersionSchema = z.object({
+  body: z.object({
+    label: z.string().max(200, 'Label must be at most 200 characters').optional(),
+  }),
   query: z.object({}).optional(),
   params: z.object({ id: z.string().min(1) }),
 });
@@ -40,7 +42,7 @@ router.use(requireAuth);
 
 router.get('/', validate(listVersionsSchema), asyncHandler(listVersionsHandler));
 router.get('/:versionId', validate(versionIdParamSchema), asyncHandler(getVersionHandler));
-router.post('/', validate(documentIdParamSchema), asyncHandler(createVersionHandler));
+router.post('/', validate(createVersionSchema), asyncHandler(createVersionHandler));
 router.post('/:versionId/restore', validate(versionIdParamSchema), asyncHandler(restoreVersionHandler));
 
 export default router;

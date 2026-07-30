@@ -64,6 +64,7 @@ model DocumentVersion {
   content       Bytes    // Yjs state snapshot (garbage-collected/compacted)
   sizeBytes     Int      // content.length, cached so version list/heuristics avoid fetching the blob
   title         String   // document title at the time of the snapshot
+  label         String?  // optional user-provided name for this snapshot; null marks it as an auto-snapshot
   createdById   String
   createdAt     DateTime @default(now())
 

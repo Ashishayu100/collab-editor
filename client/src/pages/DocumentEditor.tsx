@@ -1,7 +1,8 @@
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, Check, History, Loader2, Share2 } from 'lucide-react';
-import { KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { versionApi } from '../api/versions';
 import { Editor, EditorHandle } from '../components/editor/Editor';
 import { PresencePanel } from '../components/editor/PresencePanel';
 import { VersionHistoryPanel } from '../components/editor/VersionHistoryPanel';
@@ -159,6 +160,7 @@ export default function DocumentEditor() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isTitleSaving, setIsTitleSaving] = useState(false);
   const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false);
+  const [versionSummary, setVersionSummary] = useState<{ versionNum: number; createdAt: string } | null>(null);
 
   const editorRef = useRef<EditorHandle>(null);
 
@@ -174,6 +176,32 @@ export default function DocumentEditor() {
   useEffect(() => {
     setTitleDraft(currentDocument?.title ?? '');
   }, [currentDocument?.id, currentDocument?.title]);
+
+  const refreshVersionSummary = useCallback(async (documentId: string) => {
+    try {
+      const { data } = await versionApi.list(documentId, { limit: 1 });
+      setVersionSummary(data.versions[0] ? { versionNum: data.versions[0].versionNum, createdAt: data.versions[0].createdAt } : null);
+    } catch {
+      // Passive indicator only — a failed fetch just leaves it showing "History".
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentDocument) void refreshVersionSummary(currentDocument.id);
+  }, [currentDocument?.id, refreshVersionSummary]);
+
+  useEffect(() => {
+    function handleKeyDown(e: globalThis.KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'h') {
+        e.preventDefault();
+        setIsVersionHistoryOpen((prev) => !prev);
+      } else if (e.key === 'Escape') {
+        setIsVersionHistoryOpen((prev) => (prev ? false : prev));
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   function startEditingTitle() {
     setTitleDraft(currentDocument?.title ?? '');
@@ -274,11 +302,14 @@ export default function DocumentEditor() {
           </div>
           <button
             type="button"
-            onClick={() => setIsVersionHistoryOpen(true)}
+            onClick={() => setIsVersionHistoryOpen((prev) => !prev)}
             className="flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-gray-200"
-            title="Version history"
+            title="Version history (Ctrl+Shift+H)"
           >
-            <History size={14} /> History
+            <History size={14} />
+            {versionSummary
+              ? `v${versionSummary.versionNum} · ${formatDistanceToNow(new Date(versionSummary.createdAt), { addSuffix: true })}`
+              : 'History'}
           </button>
           <button
             type="button"
@@ -290,23 +321,33 @@ export default function DocumentEditor() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1">
-        <Editor
-          key={currentDocument.id}
-          ref={editorRef}
+      <div className="flex min-h-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1">
+          <Editor
+            key={currentDocument.id}
+            ref={editorRef}
+            documentId={currentDocument.id}
+            initialContent={currentDocument.content}
+            editable={currentDocument.role !== 'VIEWER'}
+            onDocumentRestored={() => {
+              void fetchDocument(currentDocument.id);
+              void refreshVersionSummary(currentDocument.id);
+            }}
+          />
+        </div>
+
+        <VersionHistoryPanel
           documentId={currentDocument.id}
-          initialContent={currentDocument.content}
-          editable={currentDocument.role !== 'VIEWER'}
+          documentTitle={currentDocument.title}
+          isOpen={isVersionHistoryOpen}
+          onClose={() => {
+            setIsVersionHistoryOpen(false);
+            void refreshVersionSummary(currentDocument.id);
+          }}
+          canRestore={currentDocument.role !== 'VIEWER'}
+          onRestored={() => void fetchDocument(currentDocument.id)}
         />
       </div>
-
-      <VersionHistoryPanel
-        documentId={currentDocument.id}
-        isOpen={isVersionHistoryOpen}
-        onClose={() => setIsVersionHistoryOpen(false)}
-        canRestore={currentDocument.role !== 'VIEWER'}
-        onRestored={() => void fetchDocument(currentDocument.id)}
-      />
     </div>
   );
 }

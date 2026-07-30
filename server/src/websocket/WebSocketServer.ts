@@ -21,11 +21,13 @@ import { verifyAccessToken } from '../utils/jwt';
 //   1 = awareness (cursors, presence, "typing" flag)
 //   2 = save-confirmed (server -> client only, sent after a debounced/periodic DB save)
 //   3 = ping/pong (latency probe — echoed back verbatim, no decoding needed)
+//   4 = document-restored (server -> client only, sent after a version restore completes)
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
   SAVE_CONFIRMED = 2, // server -> client only
   PING = 3,
+  DOCUMENT_RESTORED = 4, // server -> client only
 }
 
 const SAVE_DEBOUNCE_MS = 5000;
@@ -365,6 +367,19 @@ export class CollabWebSocketServer {
     console.log(`[WS] Room destroyed for document ${room.docId} (empty for ${EMPTY_ROOM_CLEANUP_MS / 1000}s)`);
   }
 
+  /**
+   * The true current content of a document, if it's live in memory right now — always more
+   * up to date than Postgres, which only reflects the room's last debounced/periodic save (up
+   * to SAVE_DEBOUNCE_MS / PERIODIC_SAVE_INTERVAL_MS stale). Callers that need "the document's
+   * content right now" (manual snapshots, the pre-restore safety snapshot) should prefer this
+   * over reading `document.content` directly, falling back to the DB only when no room is live.
+   */
+  public getLiveDocumentState(documentId: string): Buffer | null {
+    const room = this.rooms.get(documentId);
+    if (!room) return null;
+    return Buffer.from(Y.encodeStateAsUpdate(room.ydoc));
+  }
+
   /** Snapshot of who currently has the document open, for the REST API / dashboard. */
   public getActiveUsers(documentId: string): ActiveUser[] {
     const room = this.rooms.get(documentId);
@@ -408,6 +423,35 @@ export class CollabWebSocketServer {
     });
 
     restoredDoc.destroy();
+    return true;
+  }
+
+  /**
+   * Notify everyone currently connected to a document that it was just restored to an earlier
+   * version, so clients can show a "Document restored to Version N by X" toast. Purely
+   * informational — the actual content change is delivered separately via applyRestoredState.
+   * Returns whether a live room existed to notify; if not, nobody is connected to see it anyway.
+   */
+  public notifyVersionRestored(
+    documentId: string,
+    payload: { versionNum: number; restoredBy: string; label: string | null }
+  ): boolean {
+    const room = this.rooms.get(documentId);
+    if (!room) return false;
+
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MessageType.DOCUMENT_RESTORED);
+    encoding.writeVarUint(encoder, payload.versionNum);
+    encoding.writeVarString(encoder, payload.restoredBy);
+    encoding.writeVarString(encoder, payload.label ?? '');
+    const message = encoding.toUint8Array(encoder);
+
+    room.clients.forEach((_client, ws) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(message);
+      }
+    });
+
     return true;
   }
 
@@ -467,7 +511,7 @@ export class CollabWebSocketServer {
         await tx.document.update({ where: { id: room.docId }, data: { content: state } });
 
         if (shouldSnapshot && editorId) {
-          await createVersion(room.docId, state, editorId, undefined, tx);
+          await createVersion(room.docId, state, editorId, { client: tx });
         }
       });
 

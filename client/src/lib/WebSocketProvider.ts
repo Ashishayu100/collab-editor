@@ -10,11 +10,19 @@ import { getUserColor } from './colors';
 //   1 = awareness (cursors, presence, "typing" flag)
 //   2 = save-confirmed (server -> client only, sent after a debounced/periodic DB save)
 //   3 = ping/pong (latency probe, echoed verbatim by the server)
+//   4 = document-restored (server -> client only, sent after a version restore completes)
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
   SAVE_CONFIRMED = 2,
   PING = 3,
+  DOCUMENT_RESTORED = 4,
+}
+
+export interface DocumentRestoredEvent {
+  versionNum: number;
+  restoredBy: string;
+  label: string | null;
 }
 
 export enum ConnectionStatus {
@@ -78,6 +86,7 @@ export class WebSocketProvider {
   private latencyListeners: Set<(latencyMs: number) => void> = new Set();
   private offlineEditsSyncedListeners: Set<() => void> = new Set();
   private staleTabListeners: Set<() => void> = new Set();
+  private documentRestoredListeners: Set<(event: DocumentRestoredEvent) => void> = new Set();
   private _status: ConnectionStatus = ConnectionStatus.DISCONNECTED;
   private destroyed = false;
 
@@ -187,6 +196,12 @@ export class WebSocketProvider {
   onStaleTab(listener: () => void): () => void {
     this.staleTabListeners.add(listener);
     return () => this.staleTabListeners.delete(listener);
+  }
+
+  /** Fires whenever the server reports this document was restored to an earlier version. */
+  onDocumentRestored(listener: (event: DocumentRestoredEvent) => void): () => void {
+    this.documentRestoredListeners.add(listener);
+    return () => this.documentRestoredListeners.delete(listener);
   }
 
   private emitStats() {
@@ -334,6 +349,14 @@ export class WebSocketProvider {
         const sentAt = decoding.readFloat64(decoder);
         this._latency = Date.now() - sentAt;
         this.latencyListeners.forEach((listener) => listener(this._latency!));
+        break;
+      }
+      case MessageType.DOCUMENT_RESTORED: {
+        const versionNum = decoding.readVarUint(decoder);
+        const restoredBy = decoding.readVarString(decoder);
+        const label = decoding.readVarString(decoder);
+        const event: DocumentRestoredEvent = { versionNum, restoredBy, label: label || null };
+        this.documentRestoredListeners.forEach((listener) => listener(event));
         break;
       }
       default:
@@ -545,6 +568,7 @@ export class WebSocketProvider {
     this.latencyListeners.clear();
     this.offlineEditsSyncedListeners.clear();
     this.staleTabListeners.clear();
+    this.documentRestoredListeners.clear();
     this.connected = false;
     this.setStatus(ConnectionStatus.DISCONNECTED);
   }

@@ -1,9 +1,11 @@
 import { useCallback, useState } from 'react';
 import { VersionDetail, VersionSummary, versionApi } from '../api/versions';
 import { getErrorMessage } from '../lib/utils';
+import { downloadVersionAsHtml } from '../lib/versionExport';
 
 export function useVersions(documentId: string) {
   const [versions, setVersions] = useState<VersionSummary[]>([]);
+  const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -15,6 +17,7 @@ export function useVersions(documentId: string) {
       const { data } = await versionApi.list(documentId);
       setVersions(data.versions);
       setNextCursor(data.nextCursor);
+      setTotal(data.total);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -30,6 +33,7 @@ export function useVersions(documentId: string) {
       const { data } = await versionApi.list(documentId, { cursor: nextCursor });
       setVersions((prev) => [...prev, ...data.versions]);
       setNextCursor(data.nextCursor);
+      setTotal(data.total);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -37,19 +41,25 @@ export function useVersions(documentId: string) {
     }
   }, [documentId, nextCursor, isLoading]);
 
-  const createVersion = useCallback(async (): Promise<VersionSummary> => {
-    const { data } = await versionApi.create(documentId);
-    setVersions((prev) => [data.version, ...prev]);
-    return data.version;
-  }, [documentId]);
+  const createVersion = useCallback(
+    async (label?: string): Promise<VersionSummary> => {
+      const { data } = await versionApi.create(documentId, label);
+      setVersions((prev) => [data.version, ...prev]);
+      setTotal((prev) => prev + 1);
+      return data.version;
+    },
+    [documentId]
+  );
 
   const restoreVersion = useCallback(
     async (versionId: string): Promise<VersionSummary> => {
       const { data } = await versionApi.restore(documentId, versionId);
-      setVersions((prev) => [data.version, ...prev]);
+      // A restore actually creates two new versions server-side (the pre-restore auto-save and
+      // the "Restored from version N" entry) — refetch rather than guess at both.
+      await fetchVersions();
       return data.version;
     },
-    [documentId]
+    [documentId, fetchVersions]
   );
 
   const getVersionContent = useCallback(
@@ -60,8 +70,22 @@ export function useVersions(documentId: string) {
     [documentId]
   );
 
+  const exportVersionAsHtml = useCallback(
+    async (version: VersionSummary, documentTitle: string): Promise<void> => {
+      const detail = await getVersionContent(version.id);
+      downloadVersionAsHtml({
+        content: detail.content,
+        documentTitle,
+        versionNum: version.versionNum,
+        label: version.label,
+      });
+    },
+    [getVersionContent]
+  );
+
   return {
     versions,
+    total,
     isLoading,
     error,
     hasMore: nextCursor !== null,
@@ -70,5 +94,6 @@ export function useVersions(documentId: string) {
     createVersion,
     restoreVersion,
     getVersionContent,
+    exportVersionAsHtml,
   };
 }

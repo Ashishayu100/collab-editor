@@ -10,7 +10,7 @@ import * as Y from 'yjs';
 import { useIndexedDBSync } from '../../hooks/useIndexedDBSync';
 import { getUserColor } from '../../lib/colors';
 import { applyYDocState, encodeYDocState } from '../../lib/yjs';
-import { ConnectionStatus, WebSocketProvider } from '../../lib/WebSocketProvider';
+import { ConnectionStatus, DocumentRestoredEvent, WebSocketProvider } from '../../lib/WebSocketProvider';
 import { useAuthStore } from '../../stores/authStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useToastStore } from '../../stores/toastStore';
@@ -39,6 +39,8 @@ export interface EditorProps {
   /** Base64-encoded Yjs state from the server, or null/legacy content for new or old documents. */
   initialContent?: string | null;
   editable?: boolean;
+  /** Called for every connected client when the server reports a version restore completed. */
+  onDocumentRestored?: (event: DocumentRestoredEvent) => void;
 }
 
 export interface EditorHandle {
@@ -47,7 +49,7 @@ export interface EditorHandle {
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
-  { documentId, initialContent, editable = true },
+  { documentId, initialContent, editable = true, onDocumentRestored },
   ref
 ) {
   const saveContent = useDocumentStore((state) => state.saveContent);
@@ -180,6 +182,18 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     if (!provider) return undefined;
     return provider.onStaleTab(() => setStaleTabBanner(true));
   }, [provider]);
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!provider) return undefined;
+    return provider.onDocumentRestored((event) => {
+      const label = event.label ?? `Version ${event.versionNum}`;
+      addToast(`Document restored to ${label} by ${event.restoredBy}`, 'info');
+      scrollContainerRef.current?.scrollTo({ top: 0 });
+      onDocumentRestored?.(event);
+    });
+  }, [provider, addToast, onDocumentRestored]);
 
   useEffect(() => {
     if (connectionStatus === ConnectionStatus.CONNECTED) {
@@ -384,7 +398,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
           </button>
         </div>
       )}
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[720px] px-8 py-10">
           <EditorContent editor={editor} />
         </div>

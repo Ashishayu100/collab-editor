@@ -10,6 +10,8 @@ export interface VersionSummary {
   id: string;
   versionNum: number;
   title: string;
+  /** User-provided snapshot name. Null marks this as an auto-snapshot. */
+  label: string | null;
   sizeBytes: number;
   createdAt: string;
   createdBy: VersionCreator;
@@ -23,6 +25,7 @@ export interface VersionDetail extends VersionSummary {
 export interface ListVersionsResult {
   versions: VersionSummary[];
   nextCursor: string | null;
+  total: number;
 }
 
 export const versionApi = {
@@ -30,8 +33,8 @@ export const versionApi = {
     api.get<ListVersionsResult>(`/api/documents/${documentId}/versions`, { params }),
   get: (documentId: string, versionId: string) =>
     api.get<{ version: VersionDetail }>(`/api/documents/${documentId}/versions/${versionId}`),
-  create: (documentId: string) =>
-    api.post<{ version: VersionSummary }>(`/api/documents/${documentId}/versions`),
+  create: (documentId: string, label?: string) =>
+    api.post<{ version: VersionSummary }>(`/api/documents/${documentId}/versions`, { label }),
   restore: (documentId: string, versionId: string) =>
     api.post<{ version: VersionSummary }>(`/api/documents/${documentId}/versions/${versionId}/restore`),
 };
