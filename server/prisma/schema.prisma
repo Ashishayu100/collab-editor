@@ -20,6 +20,7 @@ model User {
   ownedDocuments    Document[]       @relation("DocumentOwner")
   collaborations    Collaborator[]
   comments          Comment[]
+  createdVersions   DocumentVersion[]
 
   @@map("users")
 }
@@ -59,13 +60,17 @@ model Collaborator {
 model DocumentVersion {
   id            String   @id @default(cuid())
   documentId    String
-  content       Bytes    // Yjs state snapshot
-  title         String
-  createdBy     String
+  versionNum    Int      // sequential per document, starting at 1
+  content       Bytes    // Yjs state snapshot (garbage-collected/compacted)
+  sizeBytes     Int      // content.length, cached so version list/heuristics avoid fetching the blob
+  title         String   // document title at the time of the snapshot
+  createdById   String
   createdAt     DateTime @default(now())
 
   document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdBy     User     @relation(fields: [createdById], references: [id])
 
+  @@unique([documentId, versionNum])
   @@map("document_versions")
 }
 

@@ -11,6 +11,7 @@ import {
 import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
+import versionRoutes from './version.routes';
 
 const router = Router();
 
@@ -62,5 +63,6 @@ router.get('/:id', validate(idParamSchema), asyncHandler(getDocumentHandler));
 router.patch('/:id', validate(updateTitleSchema), asyncHandler(updateDocumentTitleHandler));
 router.patch('/:id/content', validate(saveContentSchema), asyncHandler(saveDocumentContentHandler));
 router.delete('/:id', validate(idParamSchema), asyncHandler(deleteDocumentHandler));
+router.use('/:id/versions', versionRoutes);
 
 export default router;

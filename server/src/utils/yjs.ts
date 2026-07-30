@@ -57,3 +57,16 @@ export function mergeYjsState(existingState: Buffer | null, update: Buffer): Buf
   ydoc.destroy();
   return Buffer.from(mergedState);
 }
+
+/**
+ * Re-encode a Yjs state through a garbage-collected Y.Doc, dropping tombstoned/deleted
+ * content that the original update history was carrying. Shrinks state size for documents
+ * with a lot of edit history without changing the document's current content.
+ */
+export function compactYjsState(state: Buffer): Buffer {
+  const doc = new Y.Doc({ gc: true });
+  Y.applyUpdate(doc, state);
+  const compacted = Y.encodeStateAsUpdate(doc);
+  doc.destroy();
+  return Buffer.from(compacted);
+}

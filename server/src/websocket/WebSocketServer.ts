@@ -13,15 +13,20 @@ import { WebSocket, WebSocketServer as WSServer } from 'ws';
 import * as Y from 'yjs';
 import { prisma } from '../config/database';
 import { checkDocumentAccess } from '../services/document.service';
+import { createVersion, shouldAutoSnapshot } from '../services/versionService';
 import { verifyAccessToken } from '../utils/jwt';
 
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
+  SAVE_CONFIRMED = 2, // server -> client only
 }
 
 const SAVE_DEBOUNCE_MS = 5000;
 const PERIODIC_SAVE_INTERVAL_MS = 30000;
+const EMPTY_ROOM_CLEANUP_MS = 60000;
+const MAX_CONSECUTIVE_SAVE_FAILURES = 5;
+const DOCUMENT_SIZE_WARNING_BYTES = 5 * 1024 * 1024; // 5MB
 
 interface ClientConnection {
   ws: WebSocket;
@@ -39,13 +44,28 @@ interface DocumentRoom {
   awareness: Awareness;
   clients: Map<WebSocket, ClientConnection>;
   saveTimeout: ReturnType<typeof setTimeout> | null;
+  /** Set once a client disconnects leaving the room empty; cancelled if someone rejoins. */
+  emptyRoomTimeout: ReturnType<typeof setTimeout> | null;
   hasUnsavedChanges: boolean;
   isSaving: boolean;
+  /** State vector as of the last successful save — lets us skip no-op writes. */
+  lastSavedStateVector: Uint8Array | null;
+  consecutiveSaveFailures: number;
+  /** Who most recently pushed a doc update — used to attribute auto-created version snapshots. */
+  lastEditorUserId: string | null;
 }
 
 export interface ActiveUser {
   name: string;
   color: string;
+}
+
+function stateVectorsEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 export class CollabWebSocketServer {
@@ -113,7 +133,14 @@ export class CollabWebSocketServer {
 
   private async getOrCreateRoom(documentId: string): Promise<DocumentRoom> {
     const existing = this.rooms.get(documentId);
-    if (existing) return existing;
+    if (existing) {
+      // A client reconnected before the empty-room grace period elapsed — keep the room alive.
+      if (existing.emptyRoomTimeout) {
+        clearTimeout(existing.emptyRoomTimeout);
+        existing.emptyRoomTimeout = null;
+      }
+      return existing;
+    }
 
     const ydoc = new Y.Doc();
 
@@ -136,17 +163,28 @@ export class CollabWebSocketServer {
       awareness: new Awareness(ydoc),
       clients: new Map(),
       saveTimeout: null,
+      emptyRoomTimeout: null,
       hasUnsavedChanges: false,
       isSaving: false,
+      lastSavedStateVector: doc?.content ? Y.encodeStateVector(ydoc) : null,
+      consecutiveSaveFailures: 0,
+      lastEditorUserId: null,
     };
 
     ydoc.on('update', (update: Uint8Array, origin: unknown) => {
+      if (origin instanceof WebSocket) {
+        const originClient = room.clients.get(origin);
+        if (originClient) {
+          room.lastEditorUserId = originClient.userId;
+        }
+      }
+
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, MessageType.SYNC);
       writeUpdate(encoder, update);
       const message = encoding.toUint8Array(encoder);
 
-      room.clients.forEach((client, ws) => {
+      room.clients.forEach((_client, ws) => {
         if (ws !== origin && ws.readyState === WebSocket.OPEN) {
           ws.send(message);
         }
@@ -285,17 +323,33 @@ export class CollabWebSocketServer {
     console.log(`[WS] Client disconnected: userId=${userId}, documentId=${room.docId} (room has ${room.clients.size} clients remaining)`);
 
     if (room.clients.size === 0) {
-      if (room.saveTimeout) {
-        clearTimeout(room.saveTimeout);
-        room.saveTimeout = null;
-      }
+      // Persist promptly — don't make an unsaved edit wait out the full cleanup grace period.
       if (room.hasUnsavedChanges) {
         await this.saveDocument(room);
       }
-      this.rooms.delete(room.docId);
-      room.ydoc.destroy();
-      console.log(`[WS] Room destroyed for document ${room.docId}`);
+
+      if (room.emptyRoomTimeout) {
+        clearTimeout(room.emptyRoomTimeout);
+      }
+      room.emptyRoomTimeout = setTimeout(() => {
+        void this.cleanupEmptyRoom(room);
+      }, EMPTY_ROOM_CLEANUP_MS);
     }
+  }
+
+  /** Destroys a room that's been empty for the full grace period — a quick reconnect cancels this. */
+  private async cleanupEmptyRoom(room: DocumentRoom): Promise<void> {
+    if (room.clients.size > 0) return;
+
+    if (room.hasUnsavedChanges) {
+      await this.saveDocument(room);
+    }
+
+    if (this.rooms.get(room.docId) === room) {
+      this.rooms.delete(room.docId);
+    }
+    room.ydoc.destroy();
+    console.log(`[WS] Room destroyed for document ${room.docId} (empty for ${EMPTY_ROOM_CLEANUP_MS / 1000}s)`);
   }
 
   /** Snapshot of who currently has the document open, for the REST API / dashboard. */
@@ -313,6 +367,37 @@ export class CollabWebSocketServer {
     return users;
   }
 
+  /**
+   * Apply a version-restore's content to a live room (if one exists), merging it into the
+   * room's actual Y.Doc via a transaction so the change flows through the normal update
+   * pipeline — broadcasting to connected clients and scheduling a save exactly like any other
+   * edit. Returns whether a live room was updated; if not, the caller's direct DB write (see
+   * versionService.restoreVersion) is the only persistence needed, since the next time someone
+   * opens the document a fresh room will be loaded from that DB state.
+   */
+  public applyRestoredState(documentId: string, restoredState: Buffer): boolean {
+    const room = this.rooms.get(documentId);
+    if (!room) return false;
+
+    const restoredDoc = new Y.Doc();
+    Y.applyUpdate(restoredDoc, new Uint8Array(restoredState));
+
+    const liveFragment = room.ydoc.getXmlFragment('default');
+    const restoredFragment = restoredDoc.getXmlFragment('default');
+
+    room.ydoc.transact(() => {
+      liveFragment.delete(0, liveFragment.length);
+      const clonedContent = restoredFragment
+        .toArray()
+        .filter((item): item is Y.XmlElement | Y.XmlText => item instanceof Y.XmlElement || item instanceof Y.XmlText)
+        .map((item) => item.clone());
+      liveFragment.insert(0, clonedContent);
+    });
+
+    restoredDoc.destroy();
+    return true;
+  }
+
   private scheduleSave(room: DocumentRoom): void {
     if (room.saveTimeout) {
       clearTimeout(room.saveTimeout);
@@ -325,29 +410,95 @@ export class CollabWebSocketServer {
 
   private async saveDocument(room: DocumentRoom): Promise<void> {
     if (room.isSaving) return;
+
+    const currentStateVector = Y.encodeStateVector(room.ydoc);
+    if (room.lastSavedStateVector && stateVectorsEqual(currentStateVector, room.lastSavedStateVector)) {
+      // Nothing has actually changed since the last successful save (e.g. an edit that was
+      // immediately undone) — skip the write.
+      room.hasUnsavedChanges = false;
+      return;
+    }
+
     room.isSaving = true;
 
     try {
-      const state = Y.encodeStateAsUpdate(room.ydoc);
+      const state = Buffer.from(Y.encodeStateAsUpdate(room.ydoc));
 
-      await prisma.document.update({
-        where: { id: room.docId },
-        data: { content: Buffer.from(state) },
+      if (state.byteLength > DOCUMENT_SIZE_WARNING_BYTES) {
+        console.warn(`[WS] Document ${room.docId} content is ${state.byteLength} bytes — exceeds the 5MB warning threshold`);
+      }
+
+      const editorId = room.lastEditorUserId;
+      const shouldSnapshot = await shouldAutoSnapshot(room.docId, state.byteLength);
+
+      await prisma.$transaction(async (tx) => {
+        await tx.document.update({ where: { id: room.docId }, data: { content: state } });
+
+        if (shouldSnapshot && editorId) {
+          await createVersion(room.docId, state, editorId, undefined, tx);
+        }
       });
 
       room.hasUnsavedChanges = false;
+      room.lastSavedStateVector = currentStateVector;
+      room.consecutiveSaveFailures = 0;
       console.log(`[WS] Saved document ${room.docId} (${state.byteLength} bytes)`);
+      this.broadcastSaveConfirmed(room);
     } catch (error) {
-      console.error(`[WS] Failed to save document ${room.docId}:`, error);
+      room.consecutiveSaveFailures++;
+      console.error(`[WS] Failed to save document ${room.docId} (failure ${room.consecutiveSaveFailures}):`, error);
+      if (room.consecutiveSaveFailures >= MAX_CONSECUTIVE_SAVE_FAILURES) {
+        console.error(
+          `[WS] CRITICAL: document ${room.docId} has failed to save ${room.consecutiveSaveFailures} consecutive times`
+        );
+      }
     } finally {
       room.isSaving = false;
     }
+  }
+
+  private broadcastSaveConfirmed(room: DocumentRoom): void {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MessageType.SAVE_CONFIRMED);
+    encoding.writeVarString(encoder, new Date().toISOString());
+    const message = encoding.toUint8Array(encoder);
+
+    room.clients.forEach((_client, ws) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(message);
+      }
+    });
+  }
+
+  /** Save every room with unsaved changes. Used on process shutdown so nothing is lost. */
+  public async shutdown(): Promise<void> {
+    console.log(`[WS] Shutting down — saving ${this.rooms.size} room(s)...`);
+    clearInterval(this.periodicSaveInterval);
+
+    const savePromises: Promise<void>[] = [];
+    this.rooms.forEach((room) => {
+      if (room.saveTimeout) {
+        clearTimeout(room.saveTimeout);
+        room.saveTimeout = null;
+      }
+      if (room.emptyRoomTimeout) {
+        clearTimeout(room.emptyRoomTimeout);
+        room.emptyRoomTimeout = null;
+      }
+      if (room.hasUnsavedChanges) {
+        savePromises.push(this.saveDocument(room));
+      }
+    });
+
+    await Promise.allSettled(savePromises);
+    console.log('[WS] Shutdown save complete');
   }
 
   public close(): void {
     clearInterval(this.periodicSaveInterval);
     this.rooms.forEach((room) => {
       if (room.saveTimeout) clearTimeout(room.saveTimeout);
+      if (room.emptyRoomTimeout) clearTimeout(room.emptyRoomTimeout);
       room.ydoc.destroy();
     });
     this.rooms.clear();

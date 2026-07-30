@@ -15,6 +15,10 @@ interface DocumentState {
   connectionStatus: ConnectionStatus;
   /** The active document's Yjs Awareness instance, lifted up so the header can render presence. */
   awareness: Awareness | null;
+  /** True from a local edit being sent until the server confirms it's persisted (WS save-confirmed). */
+  isSavePending: boolean;
+  /** Timestamp of the last server-confirmed save, from the WebSocket save-confirmed message. */
+  lastSavedAt: Date | null;
   error: string | null;
 
   fetchDocuments: (search?: string) => Promise<void>;
@@ -26,6 +30,7 @@ interface DocumentState {
   setSaveStatus: (status: SaveStatus) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setAwareness: (awareness: Awareness | null) => void;
+  setSaveIndicatorState: (state: { pending: boolean; lastSavedAt: Date | null }) => void;
   clearCurrentDocument: () => void;
 }
 
@@ -37,6 +42,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   saveStatus: 'idle',
   connectionStatus: ConnectionStatus.DISCONNECTED,
   awareness: null,
+  isSavePending: false,
+  lastSavedAt: null,
   error: null,
 
   fetchDocuments: async (search) => {
@@ -110,12 +117,16 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   setAwareness: (awareness) => set({ awareness }),
 
+  setSaveIndicatorState: ({ pending, lastSavedAt }) => set({ isSavePending: pending, lastSavedAt }),
+
   clearCurrentDocument: () =>
     set({
       currentDocument: null,
       saveStatus: 'idle',
       connectionStatus: ConnectionStatus.DISCONNECTED,
       awareness: null,
+      isSavePending: false,
+      lastSavedAt: null,
       error: null,
     }),
 }));

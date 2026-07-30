@@ -8,6 +8,7 @@ import { getUserColor } from './colors';
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
+  SAVE_CONFIRMED = 2, // server -> client only
 }
 
 export enum ConnectionStatus {
@@ -22,6 +23,12 @@ export interface WebSocketProviderStats {
   messagesReceived: number;
   reconnectAttempts: number;
   lastMessageAt: Date | null;
+}
+
+export interface SaveIndicatorState {
+  /** True from the moment a local edit is sent until the server confirms it's persisted. */
+  pending: boolean;
+  lastSavedAt: Date | null;
 }
 
 export interface WebSocketProviderOptions {
@@ -51,6 +58,9 @@ export class WebSocketProvider {
   private messagesSent = 0;
   private messagesReceived = 0;
   private lastMessageAt: Date | null = null;
+
+  private saveStateListeners: Set<(state: SaveIndicatorState) => void> = new Set();
+  private saveIndicatorState: SaveIndicatorState = { pending: false, lastSavedAt: null };
 
   /** Public so the TipTap CollaborationCaret extension (which expects `provider.awareness`) can read it. */
   public readonly awareness: Awareness;
@@ -114,6 +124,20 @@ export class WebSocketProvider {
 
   private emitStats() {
     this.statsListeners.forEach((listener) => listener(this.stats));
+  }
+
+  get saveState(): SaveIndicatorState {
+    return this.saveIndicatorState;
+  }
+
+  onSaveStateChange(listener: (state: SaveIndicatorState) => void): () => void {
+    this.saveStateListeners.add(listener);
+    return () => this.saveStateListeners.delete(listener);
+  }
+
+  private setSaveState(state: SaveIndicatorState) {
+    this.saveIndicatorState = state;
+    this.saveStateListeners.forEach((listener) => listener(state));
   }
 
   private connect() {
@@ -209,6 +233,11 @@ export class WebSocketProvider {
         applyAwarenessUpdate(this.awareness, update, this);
         break;
       }
+      case MessageType.SAVE_CONFIRMED: {
+        const timestamp = decoding.readVarString(decoder);
+        this.setSaveState({ pending: false, lastSavedAt: new Date(timestamp) });
+        break;
+      }
       default:
         break;
     }
@@ -221,6 +250,8 @@ export class WebSocketProvider {
     encoding.writeVarUint(encoder, MessageType.SYNC);
     writeUpdate(encoder, update);
     this.send(encoding.toUint8Array(encoder));
+
+    this.setSaveState({ ...this.saveIndicatorState, pending: true });
   };
 
   private handleAwarenessUpdate = (
@@ -283,6 +314,7 @@ export class WebSocketProvider {
 
     this.statusListeners.clear();
     this.statsListeners.clear();
+    this.saveStateListeners.clear();
     this.connected = false;
     this.setStatus(ConnectionStatus.DISCONNECTED);
   }

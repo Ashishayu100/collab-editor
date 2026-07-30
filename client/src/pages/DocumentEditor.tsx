@@ -1,52 +1,90 @@
-import { ArrowLeft, Check, Loader2, Share2 } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+import { ArrowLeft, Check, History, Loader2, Share2 } from 'lucide-react';
 import { KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Editor, EditorHandle } from '../components/editor/Editor';
 import { PresencePanel } from '../components/editor/PresencePanel';
+import { VersionHistoryPanel } from '../components/editor/VersionHistoryPanel';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
 import { SaveStatus, useDocumentStore } from '../stores/documentStore';
 
-function ConnectionIndicator({ status, saveStatus }: { status: ConnectionStatus; saveStatus: SaveStatus }) {
-  if (saveStatus === 'saving') {
+/** Isolated so its periodic re-render (to keep "Xs ago" fresh) doesn't touch the rest of the header. */
+function SavedTimeAgo({ lastSavedAt }: { lastSavedAt: Date }) {
+  const [, forceTick] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => forceTick((n) => n + 1), 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return <>{formatDistanceToNow(lastSavedAt, { addSuffix: true })}</>;
+}
+
+function ConnectionIndicator({
+  status,
+  saveStatus,
+  isSavePending,
+  lastSavedAt,
+  onRetrySave,
+}: {
+  status: ConnectionStatus;
+  saveStatus: SaveStatus;
+  isSavePending: boolean;
+  lastSavedAt: Date | null;
+  onRetrySave: () => void;
+}) {
+  // Being offline overrides everything else — no save state matters if we're not connected.
+  if (status === ConnectionStatus.DISCONNECTED || status === ConnectionStatus.ERROR) {
+    return (
+      <span className="flex flex-col items-end text-xs text-red-600">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full bg-red-500" /> Offline
+        </span>
+        <span className="text-[10px] text-gray-400">Changes will sync when reconnected</span>
+      </span>
+    );
+  }
+
+  if (status === ConnectionStatus.CONNECTING) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-amber-600">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /> Connecting...
+      </span>
+    );
+  }
+
+  if (saveStatus === 'error') {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-red-600">
+        Save failed
+        <button type="button" onClick={onRetrySave} className="underline hover:no-underline">
+          Retry
+        </button>
+      </span>
+    );
+  }
+
+  if (saveStatus === 'saving' || isSavePending) {
     return (
       <span className="flex items-center gap-1.5 text-xs text-gray-500">
         <Loader2 size={14} className="animate-spin" /> Saving...
       </span>
     );
   }
-  if (saveStatus === 'saved') {
+
+  if (lastSavedAt) {
     return (
       <span className="flex items-center gap-1.5 text-xs text-green-600">
-        <Check size={14} /> Saved
+        <Check size={14} /> Saved <SavedTimeAgo lastSavedAt={lastSavedAt} />
       </span>
     );
   }
 
-  switch (status) {
-    case ConnectionStatus.CONNECTED:
-      return (
-        <span className="flex items-center gap-1.5 text-xs text-green-600">
-          <span className="h-2 w-2 rounded-full bg-green-500" /> Connected
-        </span>
-      );
-    case ConnectionStatus.CONNECTING:
-      return (
-        <span className="flex items-center gap-1.5 text-xs text-amber-600">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" /> Connecting...
-        </span>
-      );
-    case ConnectionStatus.ERROR:
-    case ConnectionStatus.DISCONNECTED:
-    default:
-      return (
-        <span className="flex flex-col items-end text-xs text-red-600">
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-red-500" /> Offline
-          </span>
-          <span className="text-[10px] text-gray-400">Changes saved locally</span>
-        </span>
-      );
-  }
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-green-600">
+      <span className="h-2 w-2 rounded-full bg-green-500" /> Connected
+    </span>
+  );
 }
 
 function EditorSkeleton() {
@@ -76,6 +114,8 @@ export default function DocumentEditor() {
     saveStatus,
     connectionStatus,
     awareness,
+    isSavePending,
+    lastSavedAt,
     fetchDocument,
     updateTitle,
     clearCurrentDocument,
@@ -84,6 +124,7 @@ export default function DocumentEditor() {
   const [titleDraft, setTitleDraft] = useState('');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isTitleSaving, setIsTitleSaving] = useState(false);
+  const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false);
 
   const editorRef = useRef<EditorHandle>(null);
 
@@ -185,9 +226,23 @@ export default function DocumentEditor() {
 
         <div className="flex shrink-0 items-center gap-4">
           <PresencePanel awareness={awareness} />
-          <div key={saveStatus === 'saved' ? 'saved' : connectionStatus} className="fade-in">
-            <ConnectionIndicator status={connectionStatus} saveStatus={saveStatus} />
+          <div key={lastSavedAt?.getTime() ?? (saveStatus === 'saved' ? 'saved' : connectionStatus)} className="fade-in">
+            <ConnectionIndicator
+              status={connectionStatus}
+              saveStatus={saveStatus}
+              isSavePending={isSavePending}
+              lastSavedAt={lastSavedAt}
+              onRetrySave={() => editorRef.current?.retrySave()}
+            />
           </div>
+          <button
+            type="button"
+            onClick={() => setIsVersionHistoryOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-gray-200"
+            title="Version history"
+          >
+            <History size={14} /> History
+          </button>
           <button
             type="button"
             title="Coming soon"
@@ -207,6 +262,14 @@ export default function DocumentEditor() {
           editable={currentDocument.role !== 'VIEWER'}
         />
       </div>
+
+      <VersionHistoryPanel
+        documentId={currentDocument.id}
+        isOpen={isVersionHistoryOpen}
+        onClose={() => setIsVersionHistoryOpen(false)}
+        canRestore={currentDocument.role !== 'VIEWER'}
+        onRestored={() => void fetchDocument(currentDocument.id)}
+      />
     </div>
   );
 }

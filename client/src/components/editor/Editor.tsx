@@ -1,22 +1,7 @@
-import Blockquote from '@tiptap/extension-blockquote';
-import BulletList from '@tiptap/extension-bullet-list';
 import Collaboration, { isChangeOrigin } from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
-import CodeBlock from '@tiptap/extension-code-block';
-import Heading from '@tiptap/extension-heading';
-import Highlight from '@tiptap/extension-highlight';
-import HorizontalRule from '@tiptap/extension-horizontal-rule';
-import Image from '@tiptap/extension-image';
-import Link from '@tiptap/extension-link';
-import OrderedList from '@tiptap/extension-ordered-list';
 import Placeholder from '@tiptap/extension-placeholder';
-import TaskItem from '@tiptap/extension-task-item';
-import TaskList from '@tiptap/extension-task-list';
-import TextAlign from '@tiptap/extension-text-align';
-import Typography from '@tiptap/extension-typography';
-import Underline from '@tiptap/extension-underline';
 import { EditorContent, useEditor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
 import { WifiOff } from 'lucide-react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Awareness } from 'y-protocols/awareness';
@@ -26,6 +11,7 @@ import { applyYDocState, encodeYDocState } from '../../lib/yjs';
 import { ConnectionStatus, WebSocketProvider } from '../../lib/WebSocketProvider';
 import { useAuthStore } from '../../stores/authStore';
 import { useDocumentStore } from '../../stores/documentStore';
+import { getContentExtensions } from './contentExtensions';
 import { Toolbar } from './Toolbar';
 import { YjsDebugPanel } from './YjsDebugPanel';
 import './editor.css';
@@ -55,6 +41,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   const saveContent = useDocumentStore((state) => state.saveContent);
   const setConnectionStatus = useDocumentStore((state) => state.setConnectionStatus);
   const setAwareness = useDocumentStore((state) => state.setAwareness);
+  const setSaveIndicatorState = useDocumentStore((state) => state.setSaveIndicatorState);
 
   const currentUserId = useAuthStore((state) => state.user?.id);
   const currentUserName = useAuthStore((state) => state.user?.name) ?? 'Anonymous';
@@ -135,6 +122,12 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     return provider.onStatusChange(setLocalConnectionStatus);
   }, [provider]);
 
+  useEffect(() => {
+    if (!provider) return;
+    setSaveIndicatorState(provider.saveState);
+    return provider.onSaveStateChange(setSaveIndicatorState);
+  }, [provider, setSaveIndicatorState]);
+
   // Tracks how long the WebSocket has been down, so the REST fallback only kicks in
   // after a real outage rather than on every brief reconnect blip.
   const disconnectedSinceRef = useRef<number | null>(Date.now());
@@ -184,36 +177,9 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   const editor = useEditor(
     {
       extensions: [
-        StarterKit.configure({
-          heading: false,
-          bulletList: false,
-          orderedList: false,
-          codeBlock: false,
-          blockquote: false,
-          horizontalRule: false,
-          link: false,
-          underline: false,
-          undoRedo: false, // Yjs's UndoManager (via Collaboration) replaces StarterKit's undo/redo
-        }),
+        ...getContentExtensions(),
         Collaboration.configure({ document: ydoc, field: 'default' }),
         Placeholder.configure({ placeholder: "Start writing... Use '/' for commands" }),
-        Heading.configure({ levels: [1, 2, 3] }),
-        BulletList,
-        OrderedList,
-        CodeBlock,
-        Blockquote,
-        HorizontalRule,
-        Highlight,
-        Underline,
-        TextAlign.configure({ types: ['heading', 'paragraph'], alignments: ['left', 'center', 'right'] }),
-        Link.configure({
-          openOnClick: false,
-          HTMLAttributes: { class: 'text-blue-500 underline cursor-pointer' },
-        }),
-        Image,
-        TaskList,
-        TaskItem.configure({ nested: true }),
-        Typography,
         CollaborationCaret.configure({
           provider: caretProvider,
           user: { name: currentUserName, color: currentUserColor.color },

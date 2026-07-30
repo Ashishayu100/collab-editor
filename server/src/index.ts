@@ -31,9 +31,33 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 const httpServer = createServer(app);
-setWebSocketServer(new CollabWebSocketServer(httpServer));
+const collabServer = new CollabWebSocketServer(httpServer);
+setWebSocketServer(collabServer);
 
 httpServer.listen(env.PORT, () => {
   console.log(`Server listening on http://localhost:${env.PORT}`);
   console.log(`WebSocket server ready on ws://localhost:${env.PORT}/ws`);
 });
+
+let shuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  console.log(`[Server] Received ${signal} — shutting down gracefully...`);
+
+  // Force-exit if a save or the server close hangs, so a stuck DB connection can't block deploys.
+  const forceExitTimeout = setTimeout(() => {
+    console.error('[Server] Graceful shutdown timed out — forcing exit');
+    process.exit(1);
+  }, 10000);
+  forceExitTimeout.unref();
+
+  await collabServer.shutdown();
+
+  httpServer.close(() => process.exit(0));
+}
+
+process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
