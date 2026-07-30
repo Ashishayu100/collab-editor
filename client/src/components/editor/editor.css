@@ -135,3 +135,36 @@
   color: #9ca3af;
   pointer-events: none;
 }
+
+/* Remote user cursor — the blinking line rendered by @tiptap/extension-collaboration-caret's
+   default `render`. Color comes from an inline `border-color` style set by the extension. */
+.collaboration-carets__caret {
+  position: relative;
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 2px solid;
+  border-right: 1px solid;
+  word-break: normal;
+  pointer-events: none;
+}
+
+/* Remote user name label floating above their cursor. Background color is set inline. */
+.collaboration-carets__label {
+  position: absolute;
+  top: -1.4em;
+  left: -1px;
+  padding: 2px 6px;
+  border-radius: 4px 4px 4px 0;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Remote user's text selection highlight. Background color is set inline via selectionRender. */
+.collaboration-carets__selection {
+  border-radius: 2px;
+}

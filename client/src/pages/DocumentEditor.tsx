@@ -2,6 +2,7 @@ import { ArrowLeft, Check, Loader2, Share2 } from 'lucide-react';
 import { KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Editor, EditorHandle } from '../components/editor/Editor';
+import { PresencePanel } from '../components/editor/PresencePanel';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
 import { SaveStatus, useDocumentStore } from '../stores/documentStore';
 
@@ -74,6 +75,7 @@ export default function DocumentEditor() {
     error,
     saveStatus,
     connectionStatus,
+    awareness,
     fetchDocument,
     updateTitle,
     clearCurrentDocument,
@@ -182,6 +184,7 @@ export default function DocumentEditor() {
         </div>
 
         <div className="flex shrink-0 items-center gap-4">
+          <PresencePanel awareness={awareness} />
           <div key={saveStatus === 'saved' ? 'saved' : connectionStatus} className="fade-in">
             <ConnectionIndicator status={connectionStatus} saveStatus={saveStatus} />
           </div>

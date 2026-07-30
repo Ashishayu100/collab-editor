@@ -2,6 +2,12 @@ import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import { IncomingMessage, Server as HTTPServer } from 'http';
 import { Duplex } from 'stream';
+import {
+  applyAwarenessUpdate,
+  Awareness,
+  encodeAwarenessUpdate,
+  removeAwarenessStates,
+} from 'y-protocols/awareness';
 import { readSyncMessage, writeSyncStep1, writeUpdate } from 'y-protocols/sync';
 import { WebSocket, WebSocketServer as WSServer } from 'ws';
 import * as Y from 'yjs';
@@ -23,15 +29,23 @@ interface ClientConnection {
   userName: string;
   userColor: string;
   documentId: string;
+  /** Awareness clientIds this connection introduced — used to clean up on disconnect. */
+  ownedClientIds: Set<number>;
 }
 
 interface DocumentRoom {
   docId: string;
   ydoc: Y.Doc;
+  awareness: Awareness;
   clients: Map<WebSocket, ClientConnection>;
   saveTimeout: ReturnType<typeof setTimeout> | null;
   hasUnsavedChanges: boolean;
   isSaving: boolean;
+}
+
+export interface ActiveUser {
+  name: string;
+  color: string;
 }
 
 export class CollabWebSocketServer {
@@ -119,6 +133,7 @@ export class CollabWebSocketServer {
     const room: DocumentRoom = {
       docId: documentId,
       ydoc,
+      awareness: new Awareness(ydoc),
       clients: new Map(),
       saveTimeout: null,
       hasUnsavedChanges: false,
@@ -140,6 +155,35 @@ export class CollabWebSocketServer {
       room.hasUnsavedChanges = true;
       this.scheduleSave(room);
     });
+
+    room.awareness.on(
+      'update',
+      ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => {
+        // Attribute newly-introduced/removed clientIds to whichever connection caused the
+        // change, so we know what to clean up when that connection disconnects.
+        if (origin instanceof WebSocket) {
+          const originClient = room.clients.get(origin);
+          if (originClient) {
+            added.forEach((id) => originClient.ownedClientIds.add(id));
+            removed.forEach((id) => originClient.ownedClientIds.delete(id));
+          }
+        }
+
+        const changedClients = added.concat(updated, removed);
+        if (changedClients.length === 0) return;
+
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, MessageType.AWARENESS);
+        encoding.writeVarUint8Array(encoder, encodeAwarenessUpdate(room.awareness, changedClients));
+        const message = encoding.toUint8Array(encoder);
+
+        room.clients.forEach((_client, ws) => {
+          if (ws !== origin && ws.readyState === WebSocket.OPEN) {
+            ws.send(message);
+          }
+        });
+      }
+    );
 
     this.rooms.set(documentId, room);
     console.log(`[WS] Room created for document ${documentId}`);
@@ -167,15 +211,24 @@ export class CollabWebSocketServer {
 
     if (ws.readyState !== WebSocket.OPEN) return;
 
-    const client: ClientConnection = { ws, userId, userName, userColor, documentId };
+    const client: ClientConnection = { ws, userId, userName, userColor, documentId, ownedClientIds: new Set() };
     room.clients.set(ws, client);
 
     console.log(`[WS] Client connected: userId=${userId}, documentId=${documentId} (room has ${room.clients.size} clients)`);
 
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, MessageType.SYNC);
-    writeSyncStep1(encoder, room.ydoc);
-    ws.send(encoding.toUint8Array(encoder));
+    const syncEncoder = encoding.createEncoder();
+    encoding.writeVarUint(syncEncoder, MessageType.SYNC);
+    writeSyncStep1(syncEncoder, room.ydoc);
+    ws.send(encoding.toUint8Array(syncEncoder));
+
+    // Bring the new client up to speed on everyone already present in the room.
+    const existingClientIds = Array.from(room.awareness.getStates().keys());
+    if (existingClientIds.length > 0) {
+      const awarenessEncoder = encoding.createEncoder();
+      encoding.writeVarUint(awarenessEncoder, MessageType.AWARENESS);
+      encoding.writeVarUint8Array(awarenessEncoder, encodeAwarenessUpdate(room.awareness, existingClientIds));
+      ws.send(encoding.toUint8Array(awarenessEncoder));
+    }
 
     ws.on('message', (data: ArrayBuffer) => {
       try {
@@ -212,7 +265,8 @@ export class CollabWebSocketServer {
         break;
       }
       case MessageType.AWARENESS: {
-        this.broadcastToOthers(room, client.ws, data);
+        const update = decoding.readVarUint8Array(decoder);
+        applyAwarenessUpdate(room.awareness, update, client.ws);
         break;
       }
       default:
@@ -220,16 +274,14 @@ export class CollabWebSocketServer {
     }
   }
 
-  private broadcastToOthers(room: DocumentRoom, sender: WebSocket, data: Uint8Array): void {
-    room.clients.forEach((_client, ws) => {
-      if (ws !== sender && ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
-      }
-    });
-  }
-
   private async handleDisconnect(room: DocumentRoom, ws: WebSocket, userId: string): Promise<void> {
+    const client = room.clients.get(ws);
     room.clients.delete(ws);
+
+    if (client && client.ownedClientIds.size > 0) {
+      removeAwarenessStates(room.awareness, Array.from(client.ownedClientIds), null);
+    }
+
     console.log(`[WS] Client disconnected: userId=${userId}, documentId=${room.docId} (room has ${room.clients.size} clients remaining)`);
 
     if (room.clients.size === 0) {
@@ -244,6 +296,21 @@ export class CollabWebSocketServer {
       room.ydoc.destroy();
       console.log(`[WS] Room destroyed for document ${room.docId}`);
     }
+  }
+
+  /** Snapshot of who currently has the document open, for the REST API / dashboard. */
+  public getActiveUsers(documentId: string): ActiveUser[] {
+    const room = this.rooms.get(documentId);
+    if (!room) return [];
+
+    const users: ActiveUser[] = [];
+    room.awareness.getStates().forEach((state) => {
+      const user = state?.user as { name?: unknown; color?: unknown } | undefined;
+      if (user && typeof user.name === 'string' && typeof user.color === 'string') {
+        users.push({ name: user.name, color: user.color });
+      }
+    });
+    return users;
   }
 
   private scheduleSave(room: DocumentRoom): void {

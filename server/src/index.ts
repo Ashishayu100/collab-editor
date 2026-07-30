@@ -7,6 +7,7 @@ import { requestLogger } from './middleware/requestLogger';
 import authRoutes from './routes/auth.routes';
 import documentRoutes from './routes/document.routes';
 import { CollabWebSocketServer } from './websocket/WebSocketServer';
+import { setWebSocketServer } from './websocket/registry';
 
 const app = express();
 
@@ -30,7 +31,7 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 const httpServer = createServer(app);
-new CollabWebSocketServer(httpServer);
+setWebSocketServer(new CollabWebSocketServer(httpServer));
 
 httpServer.listen(env.PORT, () => {
   console.log(`Server listening on http://localhost:${env.PORT}`);

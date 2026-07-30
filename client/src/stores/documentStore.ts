@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Awareness } from 'y-protocols/awareness';
 import { documentApi, DocumentDetail, DocumentListItem, DocumentSummary } from '../api/documents';
 import { getErrorMessage } from '../lib/utils';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
@@ -12,6 +13,8 @@ interface DocumentState {
   isSaving: boolean;
   saveStatus: SaveStatus;
   connectionStatus: ConnectionStatus;
+  /** The active document's Yjs Awareness instance, lifted up so the header can render presence. */
+  awareness: Awareness | null;
   error: string | null;
 
   fetchDocuments: (search?: string) => Promise<void>;
@@ -22,6 +25,7 @@ interface DocumentState {
   deleteDocument: (id: string) => Promise<void>;
   setSaveStatus: (status: SaveStatus) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
+  setAwareness: (awareness: Awareness | null) => void;
   clearCurrentDocument: () => void;
 }
 
@@ -32,6 +36,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   isSaving: false,
   saveStatus: 'idle',
   connectionStatus: ConnectionStatus.DISCONNECTED,
+  awareness: null,
   error: null,
 
   fetchDocuments: async (search) => {
@@ -103,11 +108,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 
   setConnectionStatus: (status) => set({ connectionStatus: status }),
 
+  setAwareness: (awareness) => set({ awareness }),
+
   clearCurrentDocument: () =>
     set({
       currentDocument: null,
       saveStatus: 'idle',
       connectionStatus: ConnectionStatus.DISCONNECTED,
+      awareness: null,
       error: null,
     }),
 }));

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import * as documentService from '../services/document.service';
 import { ApiError } from '../utils/ApiError';
+import { getWebSocketServer } from '../websocket/registry';
 
 function requireUserId(req: Request): string {
   if (!req.user) {
@@ -19,7 +20,13 @@ export async function listDocumentsHandler(req: Request, res: Response): Promise
     order: order as documentService.ListDocumentsParams['order'],
   });
 
-  res.status(200).json({ documents });
+  const wsServer = getWebSocketServer();
+  const documentsWithPresence = documents.map((doc) => ({
+    ...doc,
+    activeUsers: wsServer?.getActiveUsers(doc.id) ?? [],
+  }));
+
+  res.status(200).json({ documents: documentsWithPresence });
 }
 
 export async function createDocumentHandler(req: Request, res: Response): Promise<void> {
@@ -35,7 +42,8 @@ export async function getDocumentHandler(req: Request, res: Response): Promise<v
   const { id } = req.params;
 
   const document = await documentService.getDocumentById(userId, id);
-  res.status(200).json({ document });
+  const activeUsers = getWebSocketServer()?.getActiveUsers(id) ?? [];
+  res.status(200).json({ document: { ...document, activeUsers } });
 }
 
 export async function updateDocumentTitleHandler(req: Request, res: Response): Promise<void> {

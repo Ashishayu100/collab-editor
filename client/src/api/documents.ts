@@ -21,6 +21,11 @@ export interface DocumentCollaboratorDetail extends DocumentCollaboratorSummary 
   addedAt: string;
 }
 
+export interface ActiveUser {
+  name: string;
+  color: string;
+}
+
 export interface DocumentSummary {
   id: string;
   title: string;
@@ -40,6 +45,7 @@ export interface DocumentListItem {
   role: DocumentRole;
   collaboratorCount: number;
   collaborators: DocumentCollaboratorSummary[];
+  activeUsers: ActiveUser[];
 }
 
 export interface DocumentDetail {
@@ -53,6 +59,7 @@ export interface DocumentDetail {
   owner: DocumentOwner;
   role: DocumentRole;
   collaborators: DocumentCollaboratorDetail[];
+  activeUsers: ActiveUser[];
 }
 
 export interface ListDocumentsQuery {

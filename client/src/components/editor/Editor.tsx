@@ -1,6 +1,7 @@
 import Blockquote from '@tiptap/extension-blockquote';
 import BulletList from '@tiptap/extension-bullet-list';
 import Collaboration, { isChangeOrigin } from '@tiptap/extension-collaboration';
+import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import CodeBlock from '@tiptap/extension-code-block';
 import Heading from '@tiptap/extension-heading';
 import Highlight from '@tiptap/extension-highlight';
@@ -18,7 +19,9 @@ import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { WifiOff } from 'lucide-react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { Awareness } from 'y-protocols/awareness';
 import * as Y from 'yjs';
+import { getUserColor } from '../../lib/colors';
 import { applyYDocState, encodeYDocState } from '../../lib/yjs';
 import { ConnectionStatus, WebSocketProvider } from '../../lib/WebSocketProvider';
 import { useAuthStore } from '../../stores/authStore';
@@ -30,6 +33,8 @@ import './editor.css';
 const AUTOSAVE_DELAY_MS = 2000;
 /** Only fall back to REST auto-save once the WebSocket has been down this long. */
 const OFFLINE_FALLBACK_THRESHOLD_MS = 10000;
+/** How long after the last keystroke before we clear the local "typing" awareness flag. */
+const TYPING_INDICATOR_TIMEOUT_MS = 2000;
 
 export interface EditorProps {
   documentId: string;
@@ -49,6 +54,11 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
 ) {
   const saveContent = useDocumentStore((state) => state.saveContent);
   const setConnectionStatus = useDocumentStore((state) => state.setConnectionStatus);
+  const setAwareness = useDocumentStore((state) => state.setAwareness);
+
+  const currentUserId = useAuthStore((state) => state.user?.id);
+  const currentUserName = useAuthStore((state) => state.user?.name) ?? 'Anonymous';
+  const currentUserColor = useMemo(() => getUserColor(currentUserId ?? 'anonymous'), [currentUserId]);
 
   const ydoc = useMemo(() => {
     const doc = new Y.Doc();
@@ -63,23 +73,55 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentId]);
 
+  // Awareness is created eagerly via useMemo (not an effect) because the CollaborationCaret
+  // extension needs it synchronously, at editor-creation time — gating it behind an effect
+  // would mean the editor is first created without it and then has to destroy+recreate
+  // itself once the effect fires, which crashes: a child component's live subscription
+  // (Toolbar's useEditorState) can fire against the old editor mid-teardown. StrictMode's
+  // dev double-render does mean a discarded practice instance's `setInterval` + `doc.on
+  // ('destroy', ...)` listener briefly leak, but that's a harmless local timer — nothing
+  // like the live WebSocket connection Day 4 had to move into an effect to avoid leaking.
+  // It's cleaned up regardless once `ydoc.destroy()` runs, since Awareness auto-destroys
+  // itself in response to its Y.Doc's 'destroy' event.
+  const awareness = useMemo(() => new Awareness(ydoc), [ydoc]);
+
+  useEffect(() => {
+    setAwareness(awareness);
+  }, [awareness, setAwareness]);
+
+  // A stable wrapper so CollaborationCaret (which only ever reads `provider.awareness`) can
+  // be configured from the very first editor creation, independent of whether the real
+  // network provider (below) has connected yet.
+  const caretProvider = useMemo(() => ({ awareness }), [awareness]);
+
   // The WebSocket sync protocol keeps this Y.Doc up to date in real time; the server
   // persists to Postgres on its own schedule. REST auto-save only exists as an offline
   // fallback (see disconnectedSinceRef below) and for the Ctrl+S / unload safety nets.
   //
-  // Provider construction happens inside an effect (not useMemo) because its constructor
-  // opens a real WebSocket connection. StrictMode's dev double-render discards a useMemo
-  // factory's first result but still executes it, which would leak a live socket; an
+  // Unlike Awareness, the provider's constructor opens a real WebSocket connection, so it
+  // must be created inside an effect: StrictMode's dev double-render discards a useMemo
+  // factory's first result but still executes it, which would leak a live socket. An
   // effect's own synchronous cleanup correctly tears down the discarded instance instead.
   const [provider, setProvider] = useState<WebSocketProvider | null>(null);
 
   useEffect(() => {
-    const p = new WebSocketProvider(ydoc, documentId, () => useAuthStore.getState().accessToken ?? '');
+    const authUser = useAuthStore.getState().user;
+    if (!authUser) return undefined;
+
+    const p = new WebSocketProvider({
+      ydoc,
+      documentId,
+      getToken: () => useAuthStore.getState().accessToken ?? '',
+      awareness,
+      userId: authUser.id,
+      userName: authUser.name,
+    });
     setProvider(p);
+
     return () => {
       p.destroy();
     };
-  }, [ydoc, documentId]);
+  }, [ydoc, documentId, awareness]);
 
   const [connectionStatus, setLocalConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
 
@@ -107,6 +149,13 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDirtyRef = useRef(false);
   const pendingDestroyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    };
+  }, []);
 
   const flushSave = useCallback(() => {
     if (!isDirtyRef.current) return;
@@ -165,14 +214,28 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         TaskList,
         TaskItem.configure({ nested: true }),
         Typography,
+        CollaborationCaret.configure({
+          provider: caretProvider,
+          user: { name: currentUserName, color: currentUserColor.color },
+          selectionRender: (user: Record<string, unknown>) => ({
+            style: `background-color: ${typeof user.colorLight === 'string' ? user.colorLight : `${String(user.color)}20`}`,
+            class: 'collaboration-carets__selection',
+          }),
+        }),
       ],
       editable,
       immediatelyRender: false,
       onUpdate: ({ transaction }) => {
         // Skip transactions that originated from Yjs itself (e.g. a remote update applied
         // via the WebSocket provider, or the initial state load) so we don't schedule a
-        // fallback save for content we didn't just type locally.
+        // fallback save (or flag ourselves as "typing") for content we didn't just type locally.
         if (isChangeOrigin(transaction)) return;
+
+        awareness.setLocalStateField('typing', true);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => {
+          awareness.setLocalStateField('typing', false);
+        }, TYPING_INDICATOR_TIMEOUT_MS);
 
         const disconnectedSince = disconnectedSinceRef.current;
         const isLongOutage = disconnectedSince !== null && Date.now() - disconnectedSince > OFFLINE_FALLBACK_THRESHOLD_MS;
@@ -181,7 +244,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         }
       },
     },
-    [ydoc]
+    [ydoc, caretProvider, awareness]
   );
 
   useEffect(() => {

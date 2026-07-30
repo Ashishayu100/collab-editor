@@ -1,7 +1,9 @@
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
+import { applyAwarenessUpdate, Awareness, encodeAwarenessUpdate } from 'y-protocols/awareness';
 import { readSyncMessage, writeSyncStep1, writeUpdate } from 'y-protocols/sync';
 import * as Y from 'yjs';
+import { getUserColor } from './colors';
 
 enum MessageType {
   SYNC = 0,
@@ -22,6 +24,16 @@ export interface WebSocketProviderStats {
   lastMessageAt: Date | null;
 }
 
+export interface WebSocketProviderOptions {
+  ydoc: Y.Doc;
+  documentId: string;
+  getToken: () => string;
+  /** Shared with the TipTap CollaborationCaret extension so cursors/selections use the same instance. */
+  awareness: Awareness;
+  userId: string;
+  userName: string;
+}
+
 export class WebSocketProvider {
   private ws: WebSocket | null = null;
   private ydoc: Y.Doc;
@@ -40,12 +52,27 @@ export class WebSocketProvider {
   private messagesReceived = 0;
   private lastMessageAt: Date | null = null;
 
-  constructor(ydoc: Y.Doc, documentId: string, getToken: () => string) {
-    this.ydoc = ydoc;
-    this.documentId = documentId;
-    this.getToken = getToken;
+  /** Public so the TipTap CollaborationCaret extension (which expects `provider.awareness`) can read it. */
+  public readonly awareness: Awareness;
+
+  constructor(options: WebSocketProviderOptions) {
+    this.ydoc = options.ydoc;
+    this.documentId = options.documentId;
+    this.getToken = options.getToken;
+    this.awareness = options.awareness;
+
+    const { color, colorLight } = getUserColor(options.userId);
+    // Awareness.setLocalStateField() silently no-ops if the local state is currently null —
+    // which it will be if a previous provider on this same Awareness instance called
+    // destroy() (e.g. React StrictMode's mount->cleanup->mount). setLocalState() sets the
+    // base state unconditionally, so our identity is always established.
+    this.awareness.setLocalState({
+      ...(this.awareness.getLocalState() ?? {}),
+      user: { name: options.userName, color, colorLight },
+    });
 
     this.ydoc.on('update', this.handleDocUpdate);
+    this.awareness.on('update', this.handleAwarenessUpdate);
 
     this.connect();
   }
@@ -109,6 +136,12 @@ export class WebSocketProvider {
         encoding.writeVarUint(encoder, MessageType.SYNC);
         writeSyncStep1(encoder, this.ydoc);
         this.send(encoding.toUint8Array(encoder));
+
+        // Re-announce our presence: on a fresh reconnect the server (and any other clients)
+        // may have no record of our awareness clientId even though our local state is unchanged.
+        if (this.awareness.getLocalState() !== null) {
+          this.sendAwarenessUpdate([this.awareness.clientID]);
+        }
       };
 
       ws.onmessage = (event) => {
@@ -148,6 +181,13 @@ export class WebSocketProvider {
     this.emitStats();
   }
 
+  private sendAwarenessUpdate(clientIds: number[]) {
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MessageType.AWARENESS);
+    encoding.writeVarUint8Array(encoder, encodeAwarenessUpdate(this.awareness, clientIds));
+    this.send(encoding.toUint8Array(encoder));
+  }
+
   private handleServerMessage(data: Uint8Array) {
     const decoder = decoding.createDecoder(data);
     const messageType = decoding.readVarUint(decoder);
@@ -165,7 +205,8 @@ export class WebSocketProvider {
         break;
       }
       case MessageType.AWARENESS: {
-        // Handled on Day 5
+        const update = decoding.readVarUint8Array(decoder);
+        applyAwarenessUpdate(this.awareness, update, this);
         break;
       }
       default:
@@ -180,6 +221,18 @@ export class WebSocketProvider {
     encoding.writeVarUint(encoder, MessageType.SYNC);
     writeUpdate(encoder, update);
     this.send(encoding.toUint8Array(encoder));
+  };
+
+  private handleAwarenessUpdate = (
+    { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
+    origin: unknown
+  ) => {
+    // Skip changes we just applied ourselves from an incoming server message — no need to echo them back.
+    if (origin === this) return;
+
+    const changedClients = added.concat(updated, removed);
+    if (changedClients.length === 0) return;
+    this.sendAwarenessUpdate(changedClients);
   };
 
   private scheduleReconnect() {
@@ -216,6 +269,8 @@ export class WebSocketProvider {
   destroy() {
     this.destroyed = true;
     this.ydoc.off('update', this.handleDocUpdate);
+    this.awareness.off('update', this.handleAwarenessUpdate);
+    this.awareness.setLocalState(null);
 
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
