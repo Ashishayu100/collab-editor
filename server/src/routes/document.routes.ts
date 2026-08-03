@@ -5,13 +5,17 @@ import {
   deleteDocumentHandler,
   getDocumentHandler,
   listDocumentsHandler,
+  moveDocumentHandler,
   saveDocumentContentHandler,
+  searchDocumentsHandler,
+  toggleStarHandler,
   updateDocumentTitleHandler,
 } from '../controllers/document.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireDocumentAccess } from '../middleware/requireDocumentAccess';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
+import commentRoutes from './comment.routes';
 import versionRoutes from './version.routes';
 
 const router = Router();
@@ -30,7 +34,26 @@ const listQuerySchema = z.object({
     sort: z.enum(['updatedAt', 'createdAt', 'title']).optional(),
     order: z.enum(['asc', 'desc']).optional(),
     filter: z.enum(['owned', 'shared', 'all']).optional(),
+    folder: z.string().min(1).optional(),
+    starred: z.enum(['true', 'false']).optional(),
+    limit: z.string().regex(/^\d+$/, 'limit must be a number').optional(),
   }),
+});
+
+const searchQuerySchema = z.object({
+  body: z.object({}).optional(),
+  params: z.object({}).optional(),
+  query: z.object({
+    q: z.string().optional(),
+  }),
+});
+
+const moveDocumentSchema = z.object({
+  body: z.object({
+    folderId: z.string().min(1).nullable(),
+  }),
+  query: z.object({}).optional(),
+  params: z.object({ id: z.string().min(1) }),
 });
 
 const createDocumentSchema = z.object({
@@ -61,6 +84,8 @@ router.use(requireAuth);
 
 router.get('/', validate(listQuerySchema), asyncHandler(listDocumentsHandler));
 router.post('/', validate(createDocumentSchema), asyncHandler(createDocumentHandler));
+// Must be registered before /:id — otherwise Express would match "search" as the :id param.
+router.get('/search', validate(searchQuerySchema), asyncHandler(searchDocumentsHandler));
 router.get('/:id', validate(idParamSchema), requireDocumentAccess('VIEWER'), asyncHandler(getDocumentHandler));
 router.patch(
   '/:id',
@@ -74,7 +99,20 @@ router.patch(
   requireDocumentAccess('EDITOR'),
   asyncHandler(saveDocumentContentHandler)
 );
+router.patch(
+  '/:id/star',
+  validate(idParamSchema),
+  requireDocumentAccess('VIEWER'),
+  asyncHandler(toggleStarHandler)
+);
+router.patch(
+  '/:id/move',
+  validate(moveDocumentSchema),
+  requireDocumentAccess('OWNER'),
+  asyncHandler(moveDocumentHandler)
+);
 router.delete('/:id', validate(idParamSchema), requireDocumentAccess('OWNER'), asyncHandler(deleteDocumentHandler));
 router.use('/:id/versions', versionRoutes);
+router.use('/:id/comments', commentRoutes);
 
 export default router;

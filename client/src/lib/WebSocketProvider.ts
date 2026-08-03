@@ -13,6 +13,7 @@ import { getUserColor } from './colors';
 //   4 = document-restored (server -> client only, sent after a version restore completes)
 //   5 = role-updated (server -> client only, sent when the caller's role on this doc changes)
 //   6 = access-revoked (server -> client only, sent when the caller loses access entirely)
+//   7 = comment-event (server -> client only, sent after a comment REST mutation, JSON payload)
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
@@ -21,6 +22,7 @@ enum MessageType {
   DOCUMENT_RESTORED = 4,
   ROLE_UPDATED = 5,
   ACCESS_REVOKED = 6,
+  COMMENT_EVENT = 7,
 }
 
 export interface DocumentRestoredEvent {
@@ -30,6 +32,21 @@ export interface DocumentRestoredEvent {
 }
 
 export type DocumentRole = 'VIEWER' | 'EDITOR' | 'OWNER';
+
+export type CommentEventType =
+  | 'comment:created'
+  | 'comment:replied'
+  | 'comment:edited'
+  | 'comment:deleted'
+  | 'comment:resolved'
+  | 'comment:unresolved';
+
+export interface CommentEvent {
+  type: CommentEventType;
+  comment?: unknown;
+  commentId?: string;
+  parentId?: string;
+}
 
 export enum ConnectionStatus {
   /** WebSocket handshake in progress (first connection attempt). */
@@ -95,6 +112,7 @@ export class WebSocketProvider {
   private documentRestoredListeners: Set<(event: DocumentRestoredEvent) => void> = new Set();
   private roleUpdatedListeners: Set<(role: DocumentRole) => void> = new Set();
   private accessRevokedListeners: Set<() => void> = new Set();
+  private commentEventListeners: Set<(event: CommentEvent) => void> = new Set();
   private _status: ConnectionStatus = ConnectionStatus.DISCONNECTED;
   private destroyed = false;
 
@@ -222,6 +240,12 @@ export class WebSocketProvider {
   onAccessRevoked(listener: () => void): () => void {
     this.accessRevokedListeners.add(listener);
     return () => this.accessRevokedListeners.delete(listener);
+  }
+
+  /** Fires whenever a comment is created/replied/edited/deleted/resolved/unresolved on this document. */
+  onCommentEvent(listener: (event: CommentEvent) => void): () => void {
+    this.commentEventListeners.add(listener);
+    return () => this.commentEventListeners.delete(listener);
   }
 
   private emitStats() {
@@ -386,6 +410,16 @@ export class WebSocketProvider {
       }
       case MessageType.ACCESS_REVOKED: {
         this.accessRevokedListeners.forEach((listener) => listener());
+        break;
+      }
+      case MessageType.COMMENT_EVENT: {
+        const raw = decoding.readVarString(decoder);
+        try {
+          const event = JSON.parse(raw) as CommentEvent;
+          this.commentEventListeners.forEach((listener) => listener(event));
+        } catch (error) {
+          console.error('[WS Provider] Failed to parse comment event:', error);
+        }
         break;
       }
       default:
@@ -600,6 +634,7 @@ export class WebSocketProvider {
     this.documentRestoredListeners.clear();
     this.roleUpdatedListeners.clear();
     this.accessRevokedListeners.clear();
+    this.commentEventListeners.clear();
     this.connected = false;
     this.setStatus(ConnectionStatus.DISCONNECTED);
   }

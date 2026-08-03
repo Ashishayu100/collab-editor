@@ -35,6 +35,11 @@ export interface DocumentSummary {
   updatedAt: string;
 }
 
+export interface DocumentFolderRef {
+  id: string;
+  name: string;
+}
+
 export interface DocumentListItem {
   id: string;
   title: string;
@@ -49,6 +54,17 @@ export interface DocumentListItem {
   collaboratorCount: number;
   collaborators: DocumentCollaboratorSummary[];
   activeUsers: ActiveUser[];
+  /** Whether the current user has starred this document — per-user, not document-global. */
+  starred: boolean;
+  folder: DocumentFolderRef | null;
+}
+
+export interface DocumentSearchResult {
+  id: string;
+  title: string;
+  updatedAt: string;
+  role: DocumentRole;
+  starred: boolean;
 }
 
 export interface DocumentDetail {
@@ -70,16 +86,27 @@ export interface ListDocumentsQuery {
   sort?: 'updatedAt' | 'createdAt' | 'title';
   order?: 'asc' | 'desc';
   filter?: 'owned' | 'shared' | 'all';
+  /** 'root' = only documents with no folder; a folder id = only documents in that folder. */
+  folder?: 'root' | string;
+  starred?: boolean;
+  limit?: number;
 }
 
 export const documentApi = {
   create: (title?: string) => api.post<{ document: DocumentSummary }>('/api/documents', { title }),
   getAll: (params?: ListDocumentsQuery) =>
     api.get<{ documents: DocumentListItem[] }>('/api/documents', { params }),
+  search: (q: string) => api.get<{ documents: DocumentSearchResult[] }>('/api/documents/search', { params: { q } }),
   getById: (id: string) => api.get<{ document: DocumentDetail }>(`/api/documents/${id}`),
   updateTitle: (id: string, title: string) =>
     api.patch<{ document: DocumentSummary }>(`/api/documents/${id}`, { title }),
   saveContent: (id: string, content: string) =>
     api.patch<{ success: boolean; updatedAt: string }>(`/api/documents/${id}/content`, { content }),
+  toggleStar: (id: string) => api.patch<{ starred: boolean }>(`/api/documents/${id}/star`),
+  move: (id: string, folderId: string | null) =>
+    api.patch<{ document: DocumentSummary & { folderId: string | null; folder: DocumentFolderRef | null } }>(
+      `/api/documents/${id}/move`,
+      { folderId }
+    ),
   delete: (id: string) => api.delete<{ success: boolean }>(`/api/documents/${id}`),
 };

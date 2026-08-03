@@ -12,11 +12,14 @@ function requireUserId(req: Request): string {
 
 export async function listDocumentsHandler(req: Request, res: Response): Promise<void> {
   const userId = requireUserId(req);
-  const { search, sort, order, filter } = req.query as {
+  const { search, sort, order, filter, folder, starred, limit } = req.query as {
     search?: string;
     sort?: string;
     order?: string;
     filter?: string;
+    folder?: string;
+    starred?: string;
+    limit?: string;
   };
 
   const documents = await documentService.listDocuments(userId, {
@@ -24,6 +27,9 @@ export async function listDocumentsHandler(req: Request, res: Response): Promise
     sort: sort as documentService.ListDocumentsParams['sort'],
     order: order as documentService.ListDocumentsParams['order'],
     filter: filter as documentService.ListDocumentsParams['filter'],
+    folder: folder as documentService.ListDocumentsParams['folder'],
+    starred: starred === 'true' ? true : undefined,
+    limit: limit ? Number(limit) : undefined,
   });
 
   const wsServer = getWebSocketServer();
@@ -33,6 +39,31 @@ export async function listDocumentsHandler(req: Request, res: Response): Promise
   }));
 
   res.status(200).json({ documents: documentsWithPresence });
+}
+
+export async function searchDocumentsHandler(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
+  const { q } = req.query as { q?: string };
+
+  const documents = await documentService.searchDocuments(userId, q ?? '');
+  res.status(200).json({ documents });
+}
+
+export async function toggleStarHandler(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
+  const { id } = req.params;
+
+  const starred = await documentService.toggleStar(userId, id);
+  res.status(200).json({ starred });
+}
+
+export async function moveDocumentHandler(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
+  const { id } = req.params;
+  const { folderId } = req.body as { folderId: string | null };
+
+  const document = await documentService.moveDocument(userId, id, folderId);
+  res.status(200).json({ document });
 }
 
 export async function createDocumentHandler(req: Request, res: Response): Promise<void> {

@@ -80,6 +80,12 @@ export interface ListDocumentsParams {
   order?: 'asc' | 'desc';
   /** 'owned' = only documents this user owns; 'shared' = only ones shared with them; 'all' (default) = both. */
   filter?: 'owned' | 'shared' | 'all';
+  /** 'root' = only documents with no folder; a folder id = only documents in that folder; undefined = no folder filtering. */
+  folder?: 'root' | string;
+  /** true = only documents this user has starred. */
+  starred?: boolean;
+  /** Caps the result count — used for the dashboard's "Recent" view. */
+  limit?: number;
 }
 
 export async function listDocuments(userId: string, params: ListDocumentsParams) {
@@ -94,22 +100,38 @@ export async function listDocuments(userId: string, params: ListDocumentsParams)
         ? { AND: [{ ownerId: { not: userId } }, { collaborators: { some: { userId } } }] }
         : { OR: [{ ownerId: userId }, { collaborators: { some: { userId } } }] };
 
+  const folderFilter: Prisma.DocumentWhereInput =
+    params.folder === 'root' ? { folderId: null } : params.folder ? { folderId: params.folder } : {};
+
+  const starredFilter: Prisma.DocumentWhereInput = params.starred
+    ? { starredBy: { some: { userId } } }
+    : {};
+
   const documents = await prisma.document.findMany({
     where: {
-      AND: [ownershipFilter, params.search ? { title: { contains: params.search, mode: 'insensitive' } } : {}],
+      AND: [
+        ownershipFilter,
+        folderFilter,
+        starredFilter,
+        params.search ? { title: { contains: params.search, mode: 'insensitive' } } : {},
+      ],
     },
     select: {
       id: true,
       title: true,
       ownerId: true,
       isPublic: true,
+      folderId: true,
+      folder: { select: { id: true, name: true } },
       createdAt: true,
       updatedAt: true,
       // content deliberately NOT selected — it can be large and the list view doesn't need it
       owner: { select: OWNER_SELECT },
       collaborators: { select: { id: true, userId: true, role: true, user: { select: COLLABORATOR_USER_SELECT } } },
+      starredBy: { where: { userId }, select: { id: true } },
     },
     orderBy: { [sort]: order },
+    ...(params.limit ? { take: params.limit } : {}),
   });
 
   return documents.map((doc) => {
@@ -128,7 +150,84 @@ export async function listDocuments(userId: string, params: ListDocumentsParams)
       myCollaboratorId: ownCollaborator?.id ?? null,
       collaboratorCount: doc.collaborators.length,
       collaborators: doc.collaborators.map((c) => c.user),
+      starred: doc.starredBy.length > 0,
+      folder: doc.folder,
     };
+  });
+}
+
+export interface DocumentSearchResult {
+  id: string;
+  title: string;
+  updatedAt: Date;
+  role: Role;
+  starred: boolean;
+}
+
+export async function searchDocuments(userId: string, query: string): Promise<DocumentSearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const documents = await prisma.document.findMany({
+    where: {
+      AND: [
+        { OR: [{ ownerId: userId }, { collaborators: { some: { userId } } }] },
+        { title: { contains: trimmed, mode: 'insensitive' } },
+      ],
+    },
+    select: {
+      id: true,
+      title: true,
+      updatedAt: true,
+      ownerId: true,
+      collaborators: { where: { userId }, select: { role: true } },
+      starredBy: { where: { userId }, select: { id: true } },
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 20,
+  });
+
+  return documents.map((doc) => ({
+    id: doc.id,
+    title: doc.title,
+    updatedAt: doc.updatedAt,
+    role: doc.ownerId === userId ? 'OWNER' : (doc.collaborators[0]?.role ?? 'VIEWER'),
+    starred: doc.starredBy.length > 0,
+  }));
+}
+
+/** Toggles this user's star on a document. Starring is per-user (StarredDocument), not a
+ *  document-global flag, so any collaborator can star a shared document for themselves. */
+export async function toggleStar(userId: string, documentId: string): Promise<boolean> {
+  await checkDocumentAccess(userId, documentId);
+
+  const existing = await prisma.starredDocument.findUnique({
+    where: { userId_documentId: { userId, documentId } },
+  });
+
+  if (existing) {
+    await prisma.starredDocument.delete({ where: { id: existing.id } });
+    return false;
+  }
+
+  await prisma.starredDocument.create({ data: { userId, documentId } });
+  return true;
+}
+
+export async function moveDocument(userId: string, documentId: string, folderId: string | null) {
+  await checkDocumentAccess(userId, documentId, 'OWNER');
+
+  if (folderId) {
+    const folder = await prisma.folder.findUnique({ where: { id: folderId }, select: { userId: true } });
+    if (!folder || folder.userId !== userId) {
+      throw ApiError.notFound('Folder not found');
+    }
+  }
+
+  return prisma.document.update({
+    where: { id: documentId },
+    data: { folderId },
+    select: { ...SUMMARY_SELECT, folderId: true, folder: { select: { id: true, name: true } } },
   });
 }
 

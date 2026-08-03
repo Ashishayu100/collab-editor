@@ -1,13 +1,16 @@
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowLeft, Check, History, Loader2, Share2 } from 'lucide-react';
+import { ArrowLeft, Check, History, Loader2, MessageSquare, Share2 } from 'lucide-react';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { versionApi } from '../api/versions';
+import { CommentsPanel } from '../components/comments/CommentsPanel';
 import { Editor, EditorHandle } from '../components/editor/Editor';
 import { PresencePanel } from '../components/editor/PresencePanel';
 import { ShareDialog } from '../components/editor/ShareDialog';
 import { VersionHistoryPanel } from '../components/editor/VersionHistoryPanel';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
+import { useAuthStore } from '../stores/authStore';
+import { useCommentStore } from '../stores/commentStore';
 import { SaveStatus, useDocumentStore } from '../stores/documentStore';
 
 /** Isolated so its periodic re-render (to keep "Xs ago" fresh) doesn't touch the rest of the header. */
@@ -162,15 +165,24 @@ export default function DocumentEditor() {
   const [isTitleSaving, setIsTitleSaving] = useState(false);
   const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
+  const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+  const [pendingCommentAnchor, setPendingCommentAnchor] = useState<{ text: string; offset: number } | null | undefined>(
+    undefined
+  );
   const [versionSummary, setVersionSummary] = useState<{ versionNum: number; createdAt: string } | null>(null);
+
+  const currentUserId = useAuthStore((state) => state.user?.id);
+  const commentCount = useCommentStore((state) => state.comments.filter((c) => !c.resolved).length);
 
   const editorRef = useRef<EditorHandle>(null);
 
   useEffect(() => {
     if (!id) return undefined;
     void fetchDocument(id);
+    void useCommentStore.getState().fetchComments(id);
     return () => {
       clearCurrentDocument();
+      useCommentStore.getState().clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -197,8 +209,12 @@ export default function DocumentEditor() {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'h') {
         e.preventDefault();
         setIsVersionHistoryOpen((prev) => !prev);
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        setIsCommentsOpen((prev) => !prev);
       } else if (e.key === 'Escape') {
         setIsVersionHistoryOpen((prev) => (prev ? false : prev));
+        setIsCommentsOpen((prev) => (prev ? false : prev));
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -308,6 +324,19 @@ export default function DocumentEditor() {
           </div>
           <button
             type="button"
+            onClick={() => setIsCommentsOpen((prev) => !prev)}
+            className="relative flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-gray-200"
+            title="Comments (Ctrl+Shift+M)"
+          >
+            <MessageSquare size={14} /> Comments
+            {commentCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-gray-300 px-1 text-[10px] font-semibold text-gray-700">
+                {commentCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setIsVersionHistoryOpen((prev) => !prev)}
             className="flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-gray-200"
             title="Version history (Ctrl+Shift+H)"
@@ -346,8 +375,26 @@ export default function DocumentEditor() {
             }}
             onRoleChanged={() => void fetchDocument(currentDocument.id)}
             onAccessRevoked={() => navigate('/dashboard')}
+            onStartComment={(anchor) => {
+              setPendingCommentAnchor(anchor);
+              setIsCommentsOpen(true);
+            }}
+            onCommentHighlightClick={() => setIsCommentsOpen(true)}
           />
         </div>
+
+        {currentUserId && (
+          <CommentsPanel
+            documentId={currentDocument.id}
+            isOpen={isCommentsOpen}
+            onClose={() => setIsCommentsOpen(false)}
+            canComment={currentDocument.role !== 'VIEWER'}
+            isOwner={currentDocument.role === 'OWNER'}
+            currentUserId={currentUserId}
+            pendingAnchor={pendingCommentAnchor}
+            onAnchorConsumed={() => setPendingCommentAnchor(undefined)}
+          />
+        )}
 
         <VersionHistoryPanel
           documentId={currentDocument.id}

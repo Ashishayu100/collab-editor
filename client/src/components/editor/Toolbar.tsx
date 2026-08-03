@@ -15,6 +15,7 @@ import {
   ListOrdered,
   ListTodo,
   LucideIcon,
+  MessageSquarePlus,
   Minus,
   Pilcrow,
   Quote,
@@ -33,6 +34,8 @@ interface ToolbarProps {
   /** Dims the toolbar and blocks all interaction (pointer-events) — TipTap commands invoked
    *  programmatically bypass `editable: false`, so this is the actual enforcement, not just decoration. */
   readOnly?: boolean;
+  /** Opens the "new comment" composer, anchored to the current selection if there is one. Omitted (VIEWER) hides the button. */
+  onComment?: () => void;
 }
 
 interface ToolbarButtonProps {
@@ -68,7 +71,7 @@ function Divider() {
   return <div className="mx-1 h-6 w-px shrink-0 bg-gray-300" aria-hidden />;
 }
 
-export function Toolbar({ editor, readOnly = false }: ToolbarProps) {
+export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
   const [linkModalOpen, setLinkModalOpen] = useState(false);
 
   const state = useEditorState({
@@ -277,6 +280,13 @@ export function Toolbar({ editor, readOnly = false }: ToolbarProps) {
           />
         )}
       </div>
+
+      {onComment && (
+        <>
+          <Divider />
+          <ToolbarButton label="Comment" shortcut="Ctrl+Alt+M" icon={MessageSquarePlus} onClick={onComment} />
+        </>
+      )}
     </div>
   );
 }

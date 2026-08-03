@@ -20,7 +20,10 @@ model User {
   ownedDocuments    Document[]       @relation("DocumentOwner")
   collaborations    Collaborator[]
   comments          Comment[]
+  resolvedComments  Comment[]        @relation("ResolvedComments")
   createdVersions   DocumentVersion[]
+  folders           Folder[]
+  starredDocuments  StarredDocument[]
 
   @@map("users")
 }
@@ -34,15 +37,19 @@ model Document {
   shareToken    String?  @unique // random token for the invite link; null when link sharing is off
   shareLinkRole Role     @default(VIEWER) // role granted to whoever accepts the invite link
   shareEnabled  Boolean  @default(false)
+  folderId      String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   // Relations
   owner         User            @relation("DocumentOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  folder        Folder?         @relation(fields: [folderId], references: [id], onDelete: SetNull)
   collaborators Collaborator[]
   versions      DocumentVersion[]
   comments      Comment[]
+  starredBy     StarredDocument[]
 
+  @@index([folderId])
   @@map("documents")
 }
 
@@ -79,22 +86,66 @@ model DocumentVersion {
 }
 
 model Comment {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   documentId    String
   userId        String
   content       String
-  selection     Json?    // text range the comment is anchored to
-  parentId      String?  // for threaded replies
-  resolved      Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+
+  // Thread structure: top-level comments have no parentId; replies point to the thread root.
+  parentId      String?
+  parent        Comment?  @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies       Comment[] @relation("CommentThread")
+
+  // Whether this thread is resolved (only meaningful on root comments).
+  resolved      Boolean   @default(false)
+  resolvedAt    DateTime?
+  resolvedById  String?
+  resolvedBy    User?     @relation("ResolvedComments", fields: [resolvedById], references: [id])
+
+  // Position anchoring — a text snippet + character offset used to relocate the highlight
+  // when re-scanning the document; drift is expected and handled as best-effort on the client.
+  anchorText    String?
+  anchorOffset  Int?
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent        Comment? @relation("CommentThread", fields: [parentId], references: [id])
-  replies       Comment[] @relation("CommentThread")
 
+  @@index([documentId])
+  @@index([parentId])
   @@map("comments")
+}
+
+model Folder {
+  id        String     @id @default(cuid())
+  name      String
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentId  String?
+  parent    Folder?    @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Folder[]   @relation("FolderTree")
+  documents Document[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([name, userId, parentId])
+  @@index([userId])
+  @@index([parentId])
+  @@map("folders")
+}
+
+model StarredDocument {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, documentId])
+  @@map("starred_documents")
 }
 
 enum Role {

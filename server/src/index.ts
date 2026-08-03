@@ -6,6 +6,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 import authRoutes from './routes/auth.routes';
 import documentRoutes from './routes/document.routes';
+import folderRoutes from './routes/folder.routes';
 import { documentSharingRoutes, shareAcceptRoutes } from './routes/sharing';
 import { CollabWebSocketServer } from './websocket/WebSocketServer';
 import { setWebSocketServer } from './websocket/registry';
@@ -29,6 +30,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/documents', documentSharingRoutes);
 app.use('/api/share', shareAcceptRoutes);
+app.use('/api/folders', folderRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

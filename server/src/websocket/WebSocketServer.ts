@@ -22,6 +22,7 @@ import { prisma } from '../config/database';
 import { checkDocumentAccess } from '../services/document.service';
 import { createVersion, shouldAutoSnapshot } from '../services/versionService';
 import { verifyAccessToken } from '../utils/jwt';
+import { CommentEvent } from '../types/comment';
 
 // Message type registry (shared with client/src/lib/WebSocketProvider.ts):
 //   0 = Yjs sync (sync step 1 / sync step 2 / update, per y-protocols/sync)
@@ -31,6 +32,7 @@ import { verifyAccessToken } from '../utils/jwt';
 //   4 = document-restored (server -> client only, sent after a version restore completes)
 //   5 = role-updated (server -> client only, sent when the caller's role on this doc changes)
 //   6 = access-revoked (server -> client only, sent when the caller loses access entirely)
+//   7 = comment-event (server -> client only, sent after a comment REST mutation, JSON payload)
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
@@ -39,6 +41,7 @@ enum MessageType {
   DOCUMENT_RESTORED = 4, // server -> client only
   ROLE_UPDATED = 5, // server -> client only
   ACCESS_REVOKED = 6, // server -> client only
+  COMMENT_EVENT = 7, // server -> client only
 }
 
 const SAVE_DEBOUNCE_MS = 5000;
@@ -531,6 +534,29 @@ export class CollabWebSocketServer {
       }
     });
     return revoked;
+  }
+
+  /**
+   * Broadcast a comment REST mutation (create/reply/edit/delete/resolve/unresolve) to everyone
+   * currently connected to the document, so the CommentsPanel updates in real time without
+   * polling. Returns whether a live room existed to notify.
+   */
+  public broadcastCommentEvent(documentId: string, event: CommentEvent): boolean {
+    const room = this.rooms.get(documentId);
+    if (!room) return false;
+
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MessageType.COMMENT_EVENT);
+    encoding.writeVarString(encoder, JSON.stringify(event));
+    const message = encoding.toUint8Array(encoder);
+
+    room.clients.forEach((_client, ws) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(message);
+      }
+    });
+
+    return true;
   }
 
   /**

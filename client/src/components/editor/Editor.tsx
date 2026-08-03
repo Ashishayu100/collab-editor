@@ -12,8 +12,10 @@ import { getUserColor } from '../../lib/colors';
 import { applyYDocState, encodeYDocState } from '../../lib/yjs';
 import { ConnectionStatus, DocumentRestoredEvent, DocumentRole, WebSocketProvider } from '../../lib/WebSocketProvider';
 import { useAuthStore } from '../../stores/authStore';
+import { useCommentStore } from '../../stores/commentStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useToastStore } from '../../stores/toastStore';
+import { CommentHighlight, commentHighlightPluginKey, computeCommentHighlightRanges } from './commentHighlightExtension';
 import { getContentExtensions } from './contentExtensions';
 import { Toolbar } from './Toolbar';
 import { YjsDebugPanel } from './YjsDebugPanel';
@@ -45,6 +47,10 @@ export interface EditorProps {
   onRoleChanged?: (role: DocumentRole) => void;
   /** Called when the server reports the current user's access to this document was revoked. */
   onAccessRevoked?: () => void;
+  /** Called with the current selection (or null, for a general comment) when the user asks to add a comment. */
+  onStartComment?: (anchor: { text: string; offset: number } | null) => void;
+  /** Called when the user clicks an inline comment highlight — the CommentsPanel should open/scroll to it. */
+  onCommentHighlightClick?: (commentId: string) => void;
 }
 
 export interface EditorHandle {
@@ -53,7 +59,16 @@ export interface EditorHandle {
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
-  { documentId, initialContent, editable = true, onDocumentRestored, onRoleChanged, onAccessRevoked },
+  {
+    documentId,
+    initialContent,
+    editable = true,
+    onDocumentRestored,
+    onRoleChanged,
+    onAccessRevoked,
+    onStartComment,
+    onCommentHighlightClick,
+  },
   ref
 ) {
   const saveContent = useDocumentStore((state) => state.saveContent);
@@ -217,6 +232,11 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   }, [provider, addToast, onAccessRevoked]);
 
   useEffect(() => {
+    if (!provider) return undefined;
+    return provider.onCommentEvent((event) => useCommentStore.getState().handleCommentEvent(event));
+  }, [provider]);
+
+  useEffect(() => {
     if (connectionStatus === ConnectionStatus.CONNECTED) {
       setStaleTabBanner(false);
     }
@@ -291,6 +311,14 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     [flushSave, provider]
   );
 
+  const handleCommentHighlightClick = useCallback(
+    (commentId: string) => {
+      useCommentStore.getState().setActiveComment(commentId);
+      onCommentHighlightClick?.(commentId);
+    },
+    [onCommentHighlightClick]
+  );
+
   const editor = useEditor(
     {
       extensions: [
@@ -305,6 +333,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
             class: 'collaboration-carets__selection',
           }),
         }),
+        CommentHighlight.configure({ onCommentClick: handleCommentHighlightClick }),
       ],
       editable,
       immediatelyRender: false,
@@ -336,6 +365,33 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     }
   }, [editable, editor]);
 
+  // Recompute inline comment highlights whenever the comment list or the active thread
+  // changes. Comment content itself never changes doc structure, so this doesn't need to run
+  // on every keystroke — the plugin maps existing decorations through unrelated transactions.
+  const comments = useCommentStore((state) => state.comments);
+  const activeCommentId = useCommentStore((state) => state.activeCommentId);
+
+  useEffect(() => {
+    if (!editor) return;
+    const ranges = computeCommentHighlightRanges(
+      editor.state.doc,
+      comments.map((c) => ({ id: c.id, anchorText: c.anchorText, anchorOffset: c.anchorOffset }))
+    );
+    const tr = editor.state.tr.setMeta(commentHighlightPluginKey, { ranges, activeCommentId });
+    editor.view.dispatch(tr);
+  }, [editor, comments, activeCommentId]);
+
+  const handleStartComment = useCallback(() => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    if (from !== to) {
+      const text = editor.state.doc.textBetween(from, to, ' ');
+      onStartComment?.({ text, offset: from });
+    } else {
+      onStartComment?.(null);
+    }
+  }, [editor, onStartComment]);
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -343,11 +399,15 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         isDirtyRef.current = true;
         if (debounceRef.current) clearTimeout(debounceRef.current);
         flushSave();
+      } else if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'm') {
+        if (!editable) return;
+        e.preventDefault();
+        handleStartComment();
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [flushSave]);
+  }, [flushSave, editable, handleStartComment]);
 
   useEffect(() => {
     function handleBeforeUnload() {
@@ -395,7 +455,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
 
   return (
     <div className="flex h-full flex-col">
-      <Toolbar editor={editor} readOnly={!editable} />
+      <Toolbar editor={editor} readOnly={!editable} onComment={editable ? handleStartComment : undefined} />
       {!editable && (
         <div className="flex items-center justify-center gap-2 border-b border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-500">
           View only — you can view this document but not edit it

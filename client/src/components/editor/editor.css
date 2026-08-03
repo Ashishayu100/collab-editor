@@ -168,3 +168,21 @@
 .collaboration-carets__selection {
   border-radius: 2px;
 }
+
+/* Inline comment highlight — a ProseMirror decoration (see commentHighlightExtension.ts), not
+   a persisted mark, so it never enters the collaborative document content. */
+.comment-highlight {
+  background-color: rgba(253, 224, 71, 0.35);
+  border-bottom: 2px solid rgba(202, 138, 4, 0.5);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.comment-highlight:hover {
+  background-color: rgba(253, 224, 71, 0.55);
+}
+
+.comment-highlight-active {
+  background-color: rgba(250, 204, 21, 0.65);
+  border-bottom-color: #ca8a04;
+}

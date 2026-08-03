@@ -1,14 +1,19 @@
 import { formatDistanceToNow } from 'date-fns';
-import { FileText, LogOut, MoreVertical, Pencil, Trash2 } from 'lucide-react';
-import { KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { FileText, FolderInput, FolderOpen, LogOut, MoreVertical, Pencil, Star, Trash2, Users } from 'lucide-react';
+import { KeyboardEvent, MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DocumentListItem } from '../api/documents';
+import { cn } from '../lib/utils';
+import { MoveToFolderDialog } from './dashboard/MoveToFolderDialog';
 
 interface DocumentCardProps {
   doc: DocumentListItem;
   onRename: (id: string, title: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onLeave: (documentId: string, collaboratorId: string) => Promise<void>;
+  onToggleStar: (id: string) => Promise<void>;
+  /** Called after the document is moved to a different folder — the list is filtered by folder, so the caller should refetch. */
+  onMoved?: () => void;
 }
 
 const ROLE_BADGE_STYLES: Record<string, string> = {
@@ -29,11 +34,13 @@ function AvatarCircle({ name, color, size = 28 }: { name: string; color: string;
   );
 }
 
-export function DocumentCard({ doc, onRename, onDelete, onLeave }: DocumentCardProps) {
+export function DocumentCard({ doc, onRename, onDelete, onLeave, onToggleStar, onMoved }: DocumentCardProps) {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState(doc.title);
+  const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
+  const [isStarring, setIsStarring] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -80,6 +87,17 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave }: DocumentCardP
     }
   }
 
+  async function handleToggleStar(e: ReactMouseEvent) {
+    e.stopPropagation();
+    if (isStarring) return;
+    setIsStarring(true);
+    try {
+      await onToggleStar(doc.id);
+    } finally {
+      setIsStarring(false);
+    }
+  }
+
   const isOwner = doc.role === 'OWNER';
   const otherCollaborators = doc.collaborators.filter((c) => c.id !== doc.owner.id).slice(0, 3);
 
@@ -104,7 +122,35 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave }: DocumentCardP
         >
           {doc.role.toLowerCase()}
         </span>
+        <button
+          type="button"
+          onClick={handleToggleStar}
+          disabled={isStarring}
+          title={doc.starred ? 'Unstar' : 'Star'}
+          aria-label={doc.starred ? 'Unstar document' : 'Star document'}
+          className={cn(
+            'absolute bottom-2 right-2 rounded-full bg-white/95 p-1 shadow-sm transition-opacity duration-150',
+            doc.starred ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          )}
+        >
+          <Star size={14} className={doc.starred ? 'fill-amber-400 text-amber-400' : 'text-gray-400'} />
+        </button>
       </div>
+
+      {(doc.folder || doc.collaboratorCount > 1) && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-1">
+          {doc.folder && (
+            <span className="flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">
+              <FolderOpen size={10} /> {doc.folder.name}
+            </span>
+          )}
+          {doc.collaboratorCount > 1 && (
+            <span className="flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">
+              <Users size={10} /> Shared
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
@@ -161,6 +207,16 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave }: DocumentCardP
                   </button>
                   <button
                     type="button"
+                    onClick={() => {
+                      setIsMoveDialogOpen(true);
+                      setMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <FolderInput size={14} /> Move to folder
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => void handleDelete()}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
                   >
@@ -191,6 +247,19 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave }: DocumentCardP
           </div>
         )}
       </div>
+
+      {isOwner && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <MoveToFolderDialog
+            isOpen={isMoveDialogOpen}
+            onClose={() => setIsMoveDialogOpen(false)}
+            documentId={doc.id}
+            documentTitle={doc.title}
+            currentFolderId={doc.folder?.id ?? null}
+            onMoved={onMoved}
+          />
+        </div>
+      )}
     </div>
   );
 }
