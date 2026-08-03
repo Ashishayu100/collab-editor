@@ -8,9 +8,16 @@ import {
   encodeAwarenessUpdate,
   removeAwarenessStates,
 } from 'y-protocols/awareness';
-import { readSyncMessage, writeSyncStep1, writeUpdate } from 'y-protocols/sync';
+import {
+  messageYjsSyncStep1,
+  readSyncMessage,
+  readSyncStep1,
+  writeSyncStep1,
+  writeUpdate,
+} from 'y-protocols/sync';
 import { WebSocket, WebSocketServer as WSServer } from 'ws';
 import * as Y from 'yjs';
+import { Role } from '@prisma/client';
 import { prisma } from '../config/database';
 import { checkDocumentAccess } from '../services/document.service';
 import { createVersion, shouldAutoSnapshot } from '../services/versionService';
@@ -22,12 +29,16 @@ import { verifyAccessToken } from '../utils/jwt';
 //   2 = save-confirmed (server -> client only, sent after a debounced/periodic DB save)
 //   3 = ping/pong (latency probe — echoed back verbatim, no decoding needed)
 //   4 = document-restored (server -> client only, sent after a version restore completes)
+//   5 = role-updated (server -> client only, sent when the caller's role on this doc changes)
+//   6 = access-revoked (server -> client only, sent when the caller loses access entirely)
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
   SAVE_CONFIRMED = 2, // server -> client only
   PING = 3,
   DOCUMENT_RESTORED = 4, // server -> client only
+  ROLE_UPDATED = 5, // server -> client only
+  ACCESS_REVOKED = 6, // server -> client only
 }
 
 const SAVE_DEBOUNCE_MS = 5000;
@@ -42,6 +53,8 @@ interface ClientConnection {
   userName: string;
   userColor: string;
   documentId: string;
+  /** Resolved at connect time; updated in place if the server pushes a live role change. */
+  role: Role;
   /** Awareness clientIds this connection introduced — used to clean up on disconnect. */
   ownedClientIds: Set<number>;
 }
@@ -116,7 +129,7 @@ export class CollabWebSocketServer {
 
     try {
       const payload = verifyAccessToken(token);
-      await checkDocumentAccess(payload.userId, documentId);
+      const { role } = await checkDocumentAccess(payload.userId, documentId);
 
       const user = await prisma.user.findUnique({
         where: { id: payload.userId },
@@ -130,7 +143,7 @@ export class CollabWebSocketServer {
       }
 
       this.wss.handleUpgrade(request, socket, head, (ws) => {
-        this.handleConnection(ws, documentId, payload.userId, user.name, user.avatarColor);
+        this.handleConnection(ws, documentId, payload.userId, user.name, user.avatarColor, role);
       });
     } catch (error) {
       console.error('[WS] Auth failed during upgrade:', error);
@@ -241,9 +254,10 @@ export class CollabWebSocketServer {
     documentId: string,
     userId: string,
     userName: string,
-    userColor: string
+    userColor: string,
+    role: Role
   ): void {
-    void this.setupClient(ws, documentId, userId, userName, userColor);
+    void this.setupClient(ws, documentId, userId, userName, userColor, role);
   }
 
   private async setupClient(
@@ -251,13 +265,14 @@ export class CollabWebSocketServer {
     documentId: string,
     userId: string,
     userName: string,
-    userColor: string
+    userColor: string,
+    role: Role
   ): Promise<void> {
     const room = await this.getOrCreateRoom(documentId);
 
     if (ws.readyState !== WebSocket.OPEN) return;
 
-    const client: ClientConnection = { ws, userId, userName, userColor, documentId, ownedClientIds: new Set() };
+    const client: ClientConnection = { ws, userId, userName, userColor, documentId, role, ownedClientIds: new Set() };
     room.clients.set(ws, client);
 
     console.log(`[WS] Client connected: userId=${userId}, documentId=${documentId} (room has ${room.clients.size} clients)`);
@@ -302,6 +317,21 @@ export class CollabWebSocketServer {
       case MessageType.SYNC: {
         const encoder = encoding.createEncoder();
         encoding.writeVarUint(encoder, MessageType.SYNC);
+
+        if (client.role === 'VIEWER') {
+          // Read-only: still answer "what do you have that I don't" (sync step 1) so a viewer's
+          // own Y.Doc gets caught up, but silently drop anything that would mutate the room's
+          // doc (sync step 2 / update) — a viewer pushing edits, whether from a modified client
+          // or a stale session, must never actually change the document.
+          const syncType = decoding.readVarUint(decoder);
+          if (syncType === messageYjsSyncStep1) {
+            readSyncStep1(decoder, encoder, room.ydoc);
+            if (encoding.length(encoder) > 1) {
+              client.ws.send(encoding.toUint8Array(encoder));
+            }
+          }
+          break;
+        }
 
         readSyncMessage(decoder, encoder, room.ydoc, client.ws);
 
@@ -453,6 +483,54 @@ export class CollabWebSocketServer {
     });
 
     return true;
+  }
+
+  /**
+   * Push a live role change to whichever of a user's connections are open on this document, so
+   * an already-open session reflects it immediately (e.g. becomes read-only) instead of staying
+   * stale until they refresh or reconnect. Also updates the stored per-connection role so the
+   * SYNC-message gate above takes effect on the very next message, not just future connections.
+   */
+  public notifyRoleChanged(documentId: string, userId: string, newRole: Role): boolean {
+    const room = this.rooms.get(documentId);
+    if (!room) return false;
+
+    let notified = false;
+    room.clients.forEach((client, ws) => {
+      if (client.userId !== userId) return;
+      client.role = newRole;
+      if (ws.readyState === WebSocket.OPEN) {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, MessageType.ROLE_UPDATED);
+        encoding.writeVarString(encoder, newRole);
+        ws.send(encoding.toUint8Array(encoder));
+        notified = true;
+      }
+    });
+    return notified;
+  }
+
+  /**
+   * A collaborator was just removed — tell any of their open connections on this document that
+   * their access is gone and close the socket, rather than leaving them silently connected
+   * (still receiving broadcasts, still able to attempt syncStep1) until they happen to reload.
+   */
+  public revokeAccess(documentId: string, userId: string): boolean {
+    const room = this.rooms.get(documentId);
+    if (!room) return false;
+
+    let revoked = false;
+    room.clients.forEach((client, ws) => {
+      if (client.userId !== userId) return;
+      revoked = true;
+      if (ws.readyState === WebSocket.OPEN) {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, MessageType.ACCESS_REVOKED);
+        ws.send(encoding.toUint8Array(encoder));
+        ws.close(4001, 'Access revoked');
+      }
+    });
+    return revoked;
   }
 
   /**

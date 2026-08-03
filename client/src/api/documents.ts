@@ -43,6 +43,9 @@ export interface DocumentListItem {
   updatedAt: string;
   owner: DocumentOwner;
   role: DocumentRole;
+  /** This user's own Collaborator row id (including for the owner) — null only in the rare
+   *  isPublic-viewer case where they have no Collaborator row at all. Used to "leave" a document. */
+  myCollaboratorId: string | null;
   collaboratorCount: number;
   collaborators: DocumentCollaboratorSummary[];
   activeUsers: ActiveUser[];
@@ -66,6 +69,7 @@ export interface ListDocumentsQuery {
   search?: string;
   sort?: 'updatedAt' | 'createdAt' | 'title';
   order?: 'asc' | 'desc';
+  filter?: 'owned' | 'shared' | 'all';
 }
 
 export const documentApi = {

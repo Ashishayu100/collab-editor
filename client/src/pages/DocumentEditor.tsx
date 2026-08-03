@@ -5,6 +5,7 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { versionApi } from '../api/versions';
 import { Editor, EditorHandle } from '../components/editor/Editor';
 import { PresencePanel } from '../components/editor/PresencePanel';
+import { ShareDialog } from '../components/editor/ShareDialog';
 import { VersionHistoryPanel } from '../components/editor/VersionHistoryPanel';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
 import { SaveStatus, useDocumentStore } from '../stores/documentStore';
@@ -160,6 +161,7 @@ export default function DocumentEditor() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isTitleSaving, setIsTitleSaving] = useState(false);
   const [isVersionHistoryOpen, setIsVersionHistoryOpen] = useState(false);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [versionSummary, setVersionSummary] = useState<{ versionNum: number; createdAt: string } | null>(null);
 
   const editorRef = useRef<EditorHandle>(null);
@@ -251,6 +253,10 @@ export default function DocumentEditor() {
     );
   }
 
+  // `collaborators` includes the owner's own row (see document.service.ts) — exclude it here
+  // so the badge only counts people the document was actually shared *with*.
+  const otherCollaboratorCount = currentDocument.collaborators.filter((c) => c.id !== currentDocument.owner.id).length;
+
   return (
     <div className="flex h-screen flex-col bg-white">
       <header className="flex items-center justify-between gap-4 border-b border-gray-200 px-4 py-2.5">
@@ -313,10 +319,15 @@ export default function DocumentEditor() {
           </button>
           <button
             type="button"
-            title="Coming soon"
-            className="flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-500"
+            onClick={() => setIsShareDialogOpen(true)}
+            className="relative flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-600"
           >
             <Share2 size={14} /> Share
+            {otherCollaboratorCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-white/25 px-1 text-[10px] font-semibold">
+                {otherCollaboratorCount}
+              </span>
+            )}
           </button>
         </div>
       </header>
@@ -333,6 +344,8 @@ export default function DocumentEditor() {
               void fetchDocument(currentDocument.id);
               void refreshVersionSummary(currentDocument.id);
             }}
+            onRoleChanged={() => void fetchDocument(currentDocument.id)}
+            onAccessRevoked={() => navigate('/dashboard')}
           />
         </div>
 
@@ -348,6 +361,15 @@ export default function DocumentEditor() {
           onRestored={() => void fetchDocument(currentDocument.id)}
         />
       </div>
+
+      <ShareDialog
+        isOpen={isShareDialogOpen}
+        onClose={() => setIsShareDialogOpen(false)}
+        documentId={currentDocument.id}
+        documentTitle={currentDocument.title}
+        currentUserRole={currentDocument.role}
+        onLeft={() => navigate('/dashboard')}
+      />
     </div>
   );
 }

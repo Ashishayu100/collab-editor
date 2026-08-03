@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -11,9 +11,19 @@ interface FormErrors {
   password?: string;
 }
 
+/** Only ever redirect to a path within this app — never follow an absolute/external URL. */
+function sanitizeReturnTo(value: string | null): string {
+  if (!value || !value.startsWith('/') || value.startsWith('//')) {
+    return '/dashboard';
+  }
+  return value;
+}
+
 export default function Login() {
   const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnTo = sanitizeReturnTo(searchParams.get('returnTo'));
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,7 +32,7 @@ export default function Login() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={returnTo} replace />;
   }
 
   function validate(): boolean {
@@ -48,7 +58,7 @@ export default function Login() {
     setIsSubmitting(true);
     try {
       await login(email, password);
-      navigate('/dashboard');
+      navigate(returnTo);
     } catch (error) {
       setApiError(getErrorMessage(error));
     } finally {

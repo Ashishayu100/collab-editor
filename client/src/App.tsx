@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ToastContainer } from './components/ui/ToastContainer';
 import { useAuth } from './hooks/useAuth';
+import AcceptShareLink from './pages/AcceptShareLink';
 import Dashboard from './pages/Dashboard';
 import DocumentEditor from './pages/DocumentEditor';
 import Login from './pages/Login';
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/share/:token" element={<AcceptShareLink />} />
         <Route
           path="/dashboard"
           element={

@@ -31,6 +31,9 @@ model Document {
   content       Bytes?   // Yjs document state as binary (will be used from Day 6)
   ownerId       String
   isPublic      Boolean  @default(false)
+  shareToken    String?  @unique // random token for the invite link; null when link sharing is off
+  shareLinkRole Role     @default(VIEWER) // role granted to whoever accepts the invite link
+  shareEnabled  Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

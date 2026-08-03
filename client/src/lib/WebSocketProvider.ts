@@ -11,12 +11,16 @@ import { getUserColor } from './colors';
 //   2 = save-confirmed (server -> client only, sent after a debounced/periodic DB save)
 //   3 = ping/pong (latency probe, echoed verbatim by the server)
 //   4 = document-restored (server -> client only, sent after a version restore completes)
+//   5 = role-updated (server -> client only, sent when the caller's role on this doc changes)
+//   6 = access-revoked (server -> client only, sent when the caller loses access entirely)
 enum MessageType {
   SYNC = 0,
   AWARENESS = 1,
   SAVE_CONFIRMED = 2,
   PING = 3,
   DOCUMENT_RESTORED = 4,
+  ROLE_UPDATED = 5,
+  ACCESS_REVOKED = 6,
 }
 
 export interface DocumentRestoredEvent {
@@ -24,6 +28,8 @@ export interface DocumentRestoredEvent {
   restoredBy: string;
   label: string | null;
 }
+
+export type DocumentRole = 'VIEWER' | 'EDITOR' | 'OWNER';
 
 export enum ConnectionStatus {
   /** WebSocket handshake in progress (first connection attempt). */
@@ -87,6 +93,8 @@ export class WebSocketProvider {
   private offlineEditsSyncedListeners: Set<() => void> = new Set();
   private staleTabListeners: Set<() => void> = new Set();
   private documentRestoredListeners: Set<(event: DocumentRestoredEvent) => void> = new Set();
+  private roleUpdatedListeners: Set<(role: DocumentRole) => void> = new Set();
+  private accessRevokedListeners: Set<() => void> = new Set();
   private _status: ConnectionStatus = ConnectionStatus.DISCONNECTED;
   private destroyed = false;
 
@@ -202,6 +210,18 @@ export class WebSocketProvider {
   onDocumentRestored(listener: (event: DocumentRestoredEvent) => void): () => void {
     this.documentRestoredListeners.add(listener);
     return () => this.documentRestoredListeners.delete(listener);
+  }
+
+  /** Fires when the owner changes this connection's role on the document (e.g. Editor -> Viewer). */
+  onRoleUpdated(listener: (role: DocumentRole) => void): () => void {
+    this.roleUpdatedListeners.add(listener);
+    return () => this.roleUpdatedListeners.delete(listener);
+  }
+
+  /** Fires when this connection's access to the document is revoked entirely (e.g. removed as a collaborator). */
+  onAccessRevoked(listener: () => void): () => void {
+    this.accessRevokedListeners.add(listener);
+    return () => this.accessRevokedListeners.delete(listener);
   }
 
   private emitStats() {
@@ -357,6 +377,15 @@ export class WebSocketProvider {
         const label = decoding.readVarString(decoder);
         const event: DocumentRestoredEvent = { versionNum, restoredBy, label: label || null };
         this.documentRestoredListeners.forEach((listener) => listener(event));
+        break;
+      }
+      case MessageType.ROLE_UPDATED: {
+        const role = decoding.readVarString(decoder) as DocumentRole;
+        this.roleUpdatedListeners.forEach((listener) => listener(role));
+        break;
+      }
+      case MessageType.ACCESS_REVOKED: {
+        this.accessRevokedListeners.forEach((listener) => listener());
         break;
       }
       default:
@@ -569,6 +598,8 @@ export class WebSocketProvider {
     this.offlineEditsSyncedListeners.clear();
     this.staleTabListeners.clear();
     this.documentRestoredListeners.clear();
+    this.roleUpdatedListeners.clear();
+    this.accessRevokedListeners.clear();
     this.connected = false;
     this.setStatus(ConnectionStatus.DISCONNECTED);
   }

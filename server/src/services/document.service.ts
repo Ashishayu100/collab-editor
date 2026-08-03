@@ -1,4 +1,4 @@
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { prisma } from '../config/database';
 import { ApiError } from '../utils/ApiError';
 import {
@@ -78,18 +78,25 @@ export interface ListDocumentsParams {
   search?: string;
   sort?: 'updatedAt' | 'createdAt' | 'title';
   order?: 'asc' | 'desc';
+  /** 'owned' = only documents this user owns; 'shared' = only ones shared with them; 'all' (default) = both. */
+  filter?: 'owned' | 'shared' | 'all';
 }
 
 export async function listDocuments(userId: string, params: ListDocumentsParams) {
   const sort = params.sort ?? 'updatedAt';
   const order = params.order ?? 'desc';
+  const filter = params.filter ?? 'all';
+
+  const ownershipFilter: Prisma.DocumentWhereInput =
+    filter === 'owned'
+      ? { ownerId: userId }
+      : filter === 'shared'
+        ? { AND: [{ ownerId: { not: userId } }, { collaborators: { some: { userId } } }] }
+        : { OR: [{ ownerId: userId }, { collaborators: { some: { userId } } }] };
 
   const documents = await prisma.document.findMany({
     where: {
-      AND: [
-        { OR: [{ ownerId: userId }, { collaborators: { some: { userId } } }] },
-        params.search ? { title: { contains: params.search, mode: 'insensitive' } } : {},
-      ],
+      AND: [ownershipFilter, params.search ? { title: { contains: params.search, mode: 'insensitive' } } : {}],
     },
     select: {
       id: true,
@@ -100,13 +107,13 @@ export async function listDocuments(userId: string, params: ListDocumentsParams)
       updatedAt: true,
       // content deliberately NOT selected — it can be large and the list view doesn't need it
       owner: { select: OWNER_SELECT },
-      collaborators: { select: { userId: true, role: true, user: { select: COLLABORATOR_USER_SELECT } } },
+      collaborators: { select: { id: true, userId: true, role: true, user: { select: COLLABORATOR_USER_SELECT } } },
     },
     orderBy: { [sort]: order },
   });
 
   return documents.map((doc) => {
-    const ownRole = doc.collaborators.find((c) => c.userId === userId)?.role;
+    const ownCollaborator = doc.collaborators.find((c) => c.userId === userId);
     return {
       id: doc.id,
       title: doc.title,
@@ -114,7 +121,11 @@ export async function listDocuments(userId: string, params: ListDocumentsParams)
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       owner: doc.owner,
-      role: ownRole ?? (doc.ownerId === userId ? 'OWNER' : 'VIEWER'),
+      role: ownCollaborator?.role ?? (doc.ownerId === userId ? 'OWNER' : 'VIEWER'),
+      /** This user's own Collaborator row id — the owner's row too — so the dashboard can call
+       *  DELETE /collaborators/:id to "leave" without a separate lookup. Null only for the
+       *  isPublic-viewer fallback case, where the user has no Collaborator row at all. */
+      myCollaboratorId: ownCollaborator?.id ?? null,
       collaboratorCount: doc.collaborators.length,
       collaborators: doc.collaborators.map((c) => c.user),
     };

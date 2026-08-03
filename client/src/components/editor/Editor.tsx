@@ -10,7 +10,7 @@ import * as Y from 'yjs';
 import { useIndexedDBSync } from '../../hooks/useIndexedDBSync';
 import { getUserColor } from '../../lib/colors';
 import { applyYDocState, encodeYDocState } from '../../lib/yjs';
-import { ConnectionStatus, DocumentRestoredEvent, WebSocketProvider } from '../../lib/WebSocketProvider';
+import { ConnectionStatus, DocumentRestoredEvent, DocumentRole, WebSocketProvider } from '../../lib/WebSocketProvider';
 import { useAuthStore } from '../../stores/authStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useToastStore } from '../../stores/toastStore';
@@ -41,6 +41,10 @@ export interface EditorProps {
   editable?: boolean;
   /** Called for every connected client when the server reports a version restore completed. */
   onDocumentRestored?: (event: DocumentRestoredEvent) => void;
+  /** Called when the server pushes a live role change for the current user on this document. */
+  onRoleChanged?: (role: DocumentRole) => void;
+  /** Called when the server reports the current user's access to this document was revoked. */
+  onAccessRevoked?: () => void;
 }
 
 export interface EditorHandle {
@@ -49,7 +53,7 @@ export interface EditorHandle {
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
-  { documentId, initialContent, editable = true, onDocumentRestored },
+  { documentId, initialContent, editable = true, onDocumentRestored, onRoleChanged, onAccessRevoked },
   ref
 ) {
   const saveContent = useDocumentStore((state) => state.saveContent);
@@ -194,6 +198,23 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       onDocumentRestored?.(event);
     });
   }, [provider, addToast, onDocumentRestored]);
+
+  useEffect(() => {
+    if (!provider) return undefined;
+    return provider.onRoleUpdated((role) => {
+      const message = role === 'VIEWER' ? 'Your access was changed to view only' : `Your role was changed to ${role.charAt(0)}${role.slice(1).toLowerCase()}`;
+      addToast(message, 'info');
+      onRoleChanged?.(role);
+    });
+  }, [provider, addToast, onRoleChanged]);
+
+  useEffect(() => {
+    if (!provider) return undefined;
+    return provider.onAccessRevoked(() => {
+      addToast('You no longer have access to this document', 'error');
+      onAccessRevoked?.();
+    });
+  }, [provider, addToast, onAccessRevoked]);
 
   useEffect(() => {
     if (connectionStatus === ConnectionStatus.CONNECTED) {
@@ -374,7 +395,12 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
 
   return (
     <div className="flex h-full flex-col">
-      <Toolbar editor={editor} />
+      <Toolbar editor={editor} readOnly={!editable} />
+      {!editable && (
+        <div className="flex items-center justify-center gap-2 border-b border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-500">
+          View only — you can view this document but not edit it
+        </div>
+      )}
       {staleTabBanner && (
         <div className="flex items-center justify-center gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
           <AlertTriangle size={16} />

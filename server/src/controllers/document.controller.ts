@@ -12,12 +12,18 @@ function requireUserId(req: Request): string {
 
 export async function listDocumentsHandler(req: Request, res: Response): Promise<void> {
   const userId = requireUserId(req);
-  const { search, sort, order } = req.query as { search?: string; sort?: string; order?: string };
+  const { search, sort, order, filter } = req.query as {
+    search?: string;
+    sort?: string;
+    order?: string;
+    filter?: string;
+  };
 
   const documents = await documentService.listDocuments(userId, {
     search,
     sort: sort as documentService.ListDocumentsParams['sort'],
     order: order as documentService.ListDocumentsParams['order'],
+    filter: filter as documentService.ListDocumentsParams['filter'],
   });
 
   const wsServer = getWebSocketServer();

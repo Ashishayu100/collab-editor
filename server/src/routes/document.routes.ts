@@ -9,6 +9,7 @@ import {
   updateDocumentTitleHandler,
 } from '../controllers/document.controller';
 import { requireAuth } from '../middleware/auth';
+import { requireDocumentAccess } from '../middleware/requireDocumentAccess';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 import versionRoutes from './version.routes';
@@ -28,6 +29,7 @@ const listQuerySchema = z.object({
     search: z.string().optional(),
     sort: z.enum(['updatedAt', 'createdAt', 'title']).optional(),
     order: z.enum(['asc', 'desc']).optional(),
+    filter: z.enum(['owned', 'shared', 'all']).optional(),
   }),
 });
 
@@ -59,10 +61,20 @@ router.use(requireAuth);
 
 router.get('/', validate(listQuerySchema), asyncHandler(listDocumentsHandler));
 router.post('/', validate(createDocumentSchema), asyncHandler(createDocumentHandler));
-router.get('/:id', validate(idParamSchema), asyncHandler(getDocumentHandler));
-router.patch('/:id', validate(updateTitleSchema), asyncHandler(updateDocumentTitleHandler));
-router.patch('/:id/content', validate(saveContentSchema), asyncHandler(saveDocumentContentHandler));
-router.delete('/:id', validate(idParamSchema), asyncHandler(deleteDocumentHandler));
+router.get('/:id', validate(idParamSchema), requireDocumentAccess('VIEWER'), asyncHandler(getDocumentHandler));
+router.patch(
+  '/:id',
+  validate(updateTitleSchema),
+  requireDocumentAccess('EDITOR'),
+  asyncHandler(updateDocumentTitleHandler)
+);
+router.patch(
+  '/:id/content',
+  validate(saveContentSchema),
+  requireDocumentAccess('EDITOR'),
+  asyncHandler(saveDocumentContentHandler)
+);
+router.delete('/:id', validate(idParamSchema), requireDocumentAccess('OWNER'), asyncHandler(deleteDocumentHandler));
 router.use('/:id/versions', versionRoutes);
 
 export default router;

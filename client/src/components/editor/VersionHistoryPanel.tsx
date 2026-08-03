@@ -254,52 +254,54 @@ export function VersionHistoryPanel({
           </button>
         </div>
 
-        <div className="border-b border-gray-200 p-3">
-          {isLabelInputOpen ? (
-            <div className="flex flex-col gap-2">
-              <input
-                ref={labelInputRef}
-                value={labelDraft}
-                onChange={(e) => setLabelDraft(e.target.value)}
-                onKeyDown={handleLabelInputKeyDown}
-                placeholder="Name this snapshot (optional)"
-                maxLength={200}
-                className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-              />
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleCreateVersion()}
-                  disabled={isCreating}
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isCreating ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsLabelInputOpen(false);
-                    setLabelDraft('');
-                  }}
-                  disabled={isCreating}
-                  className="rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-gray-200"
-                >
-                  Cancel
-                </button>
+        {canRestore && (
+          <div className="border-b border-gray-200 p-3">
+            {isLabelInputOpen ? (
+              <div className="flex flex-col gap-2">
+                <input
+                  ref={labelInputRef}
+                  value={labelDraft}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  onKeyDown={handleLabelInputKeyDown}
+                  placeholder="Name this snapshot (optional)"
+                  maxLength={200}
+                  className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateVersion()}
+                    disabled={isCreating}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isCreating ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsLabelInputOpen(false);
+                      setLabelDraft('');
+                    }}
+                    disabled={isCreating}
+                    className="rounded-lg bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors duration-150 hover:bg-gray-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setIsLabelInputOpen(true)}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-600"
-            >
-              <Save size={14} />
-              Save current version
-            </button>
-          )}
-        </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsLabelInputOpen(true)}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors duration-150 hover:bg-blue-600"
+              >
+                <Save size={14} />
+                Save current version
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {isLoading && versions.length === 0 && (

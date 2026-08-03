@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Awareness } from 'y-protocols/awareness';
 import { documentApi, DocumentDetail, DocumentListItem, DocumentSummary } from '../api/documents';
+import { sharingApi } from '../api/sharing';
 import { getErrorMessage } from '../lib/utils';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
 
@@ -25,12 +26,14 @@ interface DocumentState {
   reconnectAttempts: number;
   error: string | null;
 
-  fetchDocuments: (search?: string) => Promise<void>;
+  fetchDocuments: (search?: string, filter?: 'owned' | 'shared' | 'all') => Promise<void>;
   fetchDocument: (id: string) => Promise<void>;
   createDocument: (title?: string) => Promise<DocumentSummary>;
   updateTitle: (id: string, title: string) => Promise<void>;
   saveContent: (id: string, content: string) => Promise<void>;
   deleteDocument: (id: string) => Promise<void>;
+  /** Removes the current user as a collaborator ("leave") — for shared documents they don't own. */
+  leaveDocument: (documentId: string, collaboratorId: string) => Promise<void>;
   setSaveStatus: (status: SaveStatus) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setAwareness: (awareness: Awareness | null) => void;
@@ -53,10 +56,13 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
   reconnectAttempts: 0,
   error: null,
 
-  fetchDocuments: async (search) => {
+  fetchDocuments: async (search, filter) => {
     set({ isLoading: true, error: null });
     try {
-      const { data } = await documentApi.getAll(search ? { search } : undefined);
+      const { data } = await documentApi.getAll({
+        ...(search ? { search } : {}),
+        ...(filter ? { filter } : {}),
+      });
       set({ documents: data.documents, isLoading: false });
     } catch (error) {
       set({ error: getErrorMessage(error), isLoading: false });
@@ -115,6 +121,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     set((state) => ({
       documents: state.documents.filter((doc) => doc.id !== id),
       currentDocument: state.currentDocument?.id === id ? null : state.currentDocument,
+    }));
+  },
+
+  leaveDocument: async (documentId, collaboratorId) => {
+    await sharingApi.removeCollaborator(documentId, collaboratorId);
+    set((state) => ({
+      documents: state.documents.filter((doc) => doc.id !== documentId),
+      currentDocument: state.currentDocument?.id === documentId ? null : state.currentDocument,
     }));
   },
 

@@ -7,6 +7,14 @@ import { Button } from '../components/ui/Button';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useDocumentStore } from '../stores/documentStore';
 
+type DocumentFilter = 'all' | 'owned' | 'shared';
+
+const FILTER_TABS: { value: DocumentFilter; label: string }[] = [
+  { value: 'all', label: 'All Documents' },
+  { value: 'owned', label: 'My Documents' },
+  { value: 'shared', label: 'Shared with Me' },
+];
+
 function DocumentCardSkeleton() {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -20,17 +28,18 @@ function DocumentCardSkeleton() {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { documents, isLoading, fetchDocuments, createDocument, updateTitle, deleteDocument } =
+  const { documents, isLoading, fetchDocuments, createDocument, updateTitle, deleteDocument, leaveDocument } =
     useDocumentStore();
 
   const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<DocumentFilter>('all');
   const [isCreating, setIsCreating] = useState(false);
   const debouncedSearch = useDebouncedValue(search, 300);
 
   useEffect(() => {
-    void fetchDocuments(debouncedSearch || undefined);
+    void fetchDocuments(debouncedSearch || undefined, filter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch]);
+  }, [debouncedSearch, filter]);
 
   async function handleCreate() {
     setIsCreating(true);
@@ -51,6 +60,23 @@ export default function Dashboard() {
         <Button onClick={handleCreate} isLoading={isCreating} className="gap-1.5">
           <Plus size={16} /> New Document
         </Button>
+      </div>
+
+      <div className="mb-4 flex gap-1 border-b border-gray-200">
+        {FILTER_TABS.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => setFilter(tab.value)}
+            className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors duration-150 ${
+              filter === tab.value
+                ? 'border-primary text-primary'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       <div className="relative mb-6 max-w-sm">
@@ -89,6 +115,8 @@ export default function Dashboard() {
           </div>
           {search ? (
             <p className="text-sm text-gray-500">No documents match &quot;{search}&quot;.</p>
+          ) : filter === 'shared' ? (
+            <p className="text-sm text-gray-500">No documents have been shared with you yet.</p>
           ) : (
             <>
               <p className="text-sm text-gray-500">No documents yet. Create your first document!</p>
@@ -103,7 +131,7 @@ export default function Dashboard() {
       {!showEmptyState && documents.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {documents.map((doc) => (
-            <DocumentCard key={doc.id} doc={doc} onRename={updateTitle} onDelete={deleteDocument} />
+            <DocumentCard key={doc.id} doc={doc} onRename={updateTitle} onDelete={deleteDocument} onLeave={leaveDocument} />
           ))}
         </div>
       )}

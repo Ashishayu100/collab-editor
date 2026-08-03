@@ -30,6 +30,9 @@ import { LinkModal } from './LinkModal';
 
 interface ToolbarProps {
   editor: Editor;
+  /** Dims the toolbar and blocks all interaction (pointer-events) — TipTap commands invoked
+   *  programmatically bypass `editable: false`, so this is the actual enforcement, not just decoration. */
+  readOnly?: boolean;
 }
 
 interface ToolbarButtonProps {
@@ -65,7 +68,7 @@ function Divider() {
   return <div className="mx-1 h-6 w-px shrink-0 bg-gray-300" aria-hidden />;
 }
 
-export function Toolbar({ editor }: ToolbarProps) {
+export function Toolbar({ editor, readOnly = false }: ToolbarProps) {
   const [linkModalOpen, setLinkModalOpen] = useState(false);
 
   const state = useEditorState({
@@ -97,7 +100,13 @@ export function Toolbar({ editor }: ToolbarProps) {
   });
 
   return (
-    <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-[#F9FAFB] px-3 py-1.5">
+    <div
+      className={cn(
+        'sticky top-0 z-10 flex flex-wrap items-center gap-0.5 border-b border-gray-200 bg-[#F9FAFB] px-3 py-1.5',
+        readOnly && 'pointer-events-none opacity-50'
+      )}
+      aria-disabled={readOnly}
+    >
       <ToolbarButton
         label="Undo"
         shortcut="Ctrl+Z"

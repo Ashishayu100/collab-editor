@@ -7,6 +7,7 @@ import {
   restoreVersionHandler,
 } from '../controllers/version.controller';
 import { requireAuth } from '../middleware/auth';
+import { requireDocumentAccess } from '../middleware/requireDocumentAccess';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 
@@ -40,9 +41,19 @@ const createVersionSchema = z.object({
 
 router.use(requireAuth);
 
-router.get('/', validate(listVersionsSchema), asyncHandler(listVersionsHandler));
-router.get('/:versionId', validate(versionIdParamSchema), asyncHandler(getVersionHandler));
-router.post('/', validate(createVersionSchema), asyncHandler(createVersionHandler));
-router.post('/:versionId/restore', validate(versionIdParamSchema), asyncHandler(restoreVersionHandler));
+router.get('/', validate(listVersionsSchema), requireDocumentAccess('VIEWER'), asyncHandler(listVersionsHandler));
+router.get(
+  '/:versionId',
+  validate(versionIdParamSchema),
+  requireDocumentAccess('VIEWER'),
+  asyncHandler(getVersionHandler)
+);
+router.post('/', validate(createVersionSchema), requireDocumentAccess('EDITOR'), asyncHandler(createVersionHandler));
+router.post(
+  '/:versionId/restore',
+  validate(versionIdParamSchema),
+  requireDocumentAccess('EDITOR'),
+  asyncHandler(restoreVersionHandler)
+);
 
 export default router;

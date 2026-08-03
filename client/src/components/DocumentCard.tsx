@@ -1,5 +1,5 @@
 import { formatDistanceToNow } from 'date-fns';
-import { FileText, MoreVertical, Pencil, Trash2 } from 'lucide-react';
+import { FileText, LogOut, MoreVertical, Pencil, Trash2 } from 'lucide-react';
 import { KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DocumentListItem } from '../api/documents';
@@ -8,7 +8,14 @@ interface DocumentCardProps {
   doc: DocumentListItem;
   onRename: (id: string, title: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onLeave: (documentId: string, collaboratorId: string) => Promise<void>;
 }
+
+const ROLE_BADGE_STYLES: Record<string, string> = {
+  OWNER: 'bg-gray-100 text-gray-600',
+  EDITOR: 'bg-blue-50 text-blue-700',
+  VIEWER: 'bg-amber-50 text-amber-700',
+};
 
 function AvatarCircle({ name, color, size = 28 }: { name: string; color: string; size?: number }) {
   return (
@@ -22,7 +29,7 @@ function AvatarCircle({ name, color, size = 28 }: { name: string; color: string;
   );
 }
 
-export function DocumentCard({ doc, onRename, onDelete }: DocumentCardProps) {
+export function DocumentCard({ doc, onRename, onDelete, onLeave }: DocumentCardProps) {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -65,6 +72,15 @@ export function DocumentCard({ doc, onRename, onDelete }: DocumentCardProps) {
     }
   }
 
+  async function handleLeave() {
+    setMenuOpen(false);
+    if (!doc.myCollaboratorId) return;
+    if (window.confirm(`Leave "${doc.title}"? You'll lose access unless it's shared with you again.`)) {
+      await onLeave(doc.id, doc.myCollaboratorId);
+    }
+  }
+
+  const isOwner = doc.role === 'OWNER';
   const otherCollaborators = doc.collaborators.filter((c) => c.id !== doc.owner.id).slice(0, 3);
 
   return (
@@ -83,6 +99,11 @@ export function DocumentCard({ doc, onRename, onDelete }: DocumentCardProps) {
             {doc.activeUsers.length === 1 ? '1 editing' : `${doc.activeUsers.length} editing`}
           </div>
         )}
+        <span
+          className={`absolute left-2 top-2 rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${ROLE_BADGE_STYLES[doc.role]}`}
+        >
+          {doc.role.toLowerCase()}
+        </span>
       </div>
 
       <div className="flex items-start justify-between gap-2">
@@ -100,8 +121,12 @@ export function DocumentCard({ doc, onRename, onDelete }: DocumentCardProps) {
           ) : (
             <h3 className="truncate text-sm font-medium text-gray-900">{doc.title}</h3>
           )}
-          <p className="mt-1 text-xs text-gray-500">
-            Edited {formatDistanceToNow(new Date(doc.updatedAt), { addSuffix: true })}
+          <p className="mt-1 truncate text-xs text-gray-500">
+            {isOwner ? (
+              <>Edited {formatDistanceToNow(new Date(doc.updatedAt), { addSuffix: true })}</>
+            ) : (
+              <>Shared by {doc.owner.name}</>
+            )}
           </p>
         </div>
 
@@ -122,23 +147,35 @@ export function DocumentCard({ doc, onRename, onDelete }: DocumentCardProps) {
               onClick={(e) => e.stopPropagation()}
               className="absolute right-0 top-full z-10 mt-1 w-36 rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
             >
-              <button
-                type="button"
-                onClick={() => {
-                  setIsRenaming(true);
-                  setMenuOpen(false);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-              >
-                <Pencil size={14} /> Rename
-              </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
-              >
-                <Trash2 size={14} /> Delete
-              </button>
+              {isOwner ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRenaming(true);
+                      setMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <Pencil size={14} /> Rename
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete()}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleLeave()}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
+                >
+                  <LogOut size={14} /> Leave
+                </button>
+              )}
             </div>
           )}
         </div>
