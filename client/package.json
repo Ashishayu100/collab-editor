@@ -13,6 +13,7 @@
     "@tiptap/core": "^3.29.2",
     "@tiptap/extension-blockquote": "^3.29.2",
     "@tiptap/extension-bullet-list": "^3.29.2",
+    "@tiptap/extension-character-count": "^3.29.2",
     "@tiptap/extension-code-block": "^3.29.2",
     "@tiptap/extension-collaboration": "^3.29.2",
     "@tiptap/extension-collaboration-caret": "^3.29.2",

@@ -150,7 +150,7 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
       />
       <ToolbarButton
         label="Strikethrough"
-        shortcut="Ctrl+Shift+X"
+        shortcut="Ctrl+Shift+S"
         icon={Strikethrough}
         isActive={state.strike}
         onClick={() => editor.chain().focus().toggleStrike().run()}

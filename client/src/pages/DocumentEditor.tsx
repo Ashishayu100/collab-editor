@@ -1,13 +1,17 @@
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowLeft, Check, History, Loader2, MessageSquare, Share2 } from 'lucide-react';
+import { ArrowLeft, Check, History, Keyboard, Loader2, MessageSquare, Share2, Users, X } from 'lucide-react';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Awareness } from 'y-protocols/awareness';
 import { versionApi } from '../api/versions';
 import { CommentsPanel } from '../components/comments/CommentsPanel';
 import { Editor, EditorHandle } from '../components/editor/Editor';
+import { KeyboardShortcutsDialog } from '../components/editor/KeyboardShortcutsDialog';
+import { ParticipantsPanel } from '../components/editor/ParticipantsPanel';
 import { PresencePanel } from '../components/editor/PresencePanel';
 import { ShareDialog } from '../components/editor/ShareDialog';
 import { VersionHistoryPanel } from '../components/editor/VersionHistoryPanel';
+import { useAwareness } from '../hooks/useAwareness';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
 import { useAuthStore } from '../stores/authStore';
 import { useCommentStore } from '../stores/commentStore';
@@ -124,6 +128,23 @@ function ConnectionIndicator({
   );
 }
 
+/** Isolated so its awareness subscription (needed only to look up the followed user's name)
+ *  doesn't force the rest of the page to re-render on every remote cursor move. */
+function FollowBanner({ awareness, clientId, onStop }: { awareness: Awareness | null; clientId: number; onStop: () => void }) {
+  const users = useAwareness(awareness);
+  const user = users.find((u) => u.clientId === clientId);
+  if (!user) return null;
+
+  return (
+    <div className="flex items-center justify-center gap-2 border-b border-blue-200 bg-blue-50 px-4 py-1.5 text-xs font-medium text-blue-800">
+      <span>Following {user.name}</span>
+      <button type="button" onClick={onStop} className="rounded p-0.5 hover:bg-blue-100" aria-label="Stop following">
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
 function EditorSkeleton() {
   return (
     <div className="flex h-screen flex-col">
@@ -170,6 +191,9 @@ export default function DocumentEditor() {
     undefined
   );
   const [versionSummary, setVersionSummary] = useState<{ versionNum: number; createdAt: string } | null>(null);
+  const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [followingClientId, setFollowingClientId] = useState<number | null>(null);
 
   const currentUserId = useAuthStore((state) => state.user?.id);
   const commentCount = useCommentStore((state) => state.comments.filter((c) => !c.resolved).length);
@@ -206,20 +230,64 @@ export default function DocumentEditor() {
 
   useEffect(() => {
     function handleKeyDown(e: globalThis.KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'h') {
+      // `defaultPrevented` guards Ctrl+Shift+H: TipTap's Highlight extension binds the same
+      // combo, and its ProseMirror keymap handler runs (and calls preventDefault()) before this
+      // window-level listener sees the bubbled event — so when the editor has focus and handles
+      // it as "toggle highlight", we defer instead of also toggling the version history panel.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'h' && !e.defaultPrevented) {
         e.preventDefault();
         setIsVersionHistoryOpen((prev) => !prev);
       } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
         e.preventDefault();
         setIsCommentsOpen((prev) => !prev);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setIsShortcutsOpen((prev) => !prev);
       } else if (e.key === 'Escape') {
         setIsVersionHistoryOpen((prev) => (prev ? false : prev));
         setIsCommentsOpen((prev) => (prev ? false : prev));
+        setIsParticipantsOpen((prev) => (prev ? false : prev));
+        setIsShortcutsOpen((prev) => (prev ? false : prev));
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Follow mode: continuously scroll to the followed user's cursor as it moves. Ends when they
+  // disconnect, the local user starts typing, or the user clicks "Stop" (see FollowBanner).
+  useEffect(() => {
+    if (followingClientId === null || !awareness) return undefined;
+
+    let rafId: number | null = null;
+
+    function tick() {
+      rafId = null;
+      const localState = awareness!.getLocalState() as { typing?: boolean } | null;
+      if (localState?.typing) {
+        setFollowingClientId(null);
+        return;
+      }
+      if (!awareness!.getStates().has(followingClientId!)) {
+        setFollowingClientId(null);
+        return;
+      }
+      editorRef.current?.scrollToClient(followingClientId!);
+    }
+
+    function schedule() {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(tick);
+    }
+
+    awareness.on('change', schedule);
+    schedule();
+
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      awareness.off('change', schedule);
+    };
+  }, [followingClientId, awareness]);
 
   function startEditingTitle() {
     setTitleDraft(currentDocument?.title ?? '');
@@ -309,7 +377,16 @@ export default function DocumentEditor() {
         </div>
 
         <div className="flex shrink-0 items-center gap-4">
-          <PresencePanel awareness={awareness} />
+          <button
+            type="button"
+            onClick={() => setIsParticipantsOpen((prev) => !prev)}
+            className="rounded p-1 text-gray-400 transition-colors duration-150 hover:bg-gray-100 hover:text-gray-600"
+            title="Participants"
+            aria-label="Show participants"
+          >
+            <Users size={16} />
+          </button>
+          <PresencePanel awareness={awareness} onAvatarClick={(clientId) => editorRef.current?.scrollToClient(clientId)} />
           <div key={lastSavedAt?.getTime() ?? (saveStatus === 'saved' ? 'saved' : connectionStatus)} className="fade-in">
             <ConnectionIndicator
               status={connectionStatus}
@@ -358,8 +435,21 @@ export default function DocumentEditor() {
               </span>
             )}
           </button>
+          <button
+            type="button"
+            onClick={() => setIsShortcutsOpen(true)}
+            className="rounded p-1.5 text-gray-400 transition-colors duration-150 hover:bg-gray-100 hover:text-gray-600"
+            title="Keyboard shortcuts (Ctrl+/)"
+            aria-label="Show keyboard shortcuts"
+          >
+            <Keyboard size={16} />
+          </button>
         </div>
       </header>
+
+      {followingClientId !== null && (
+        <FollowBanner awareness={awareness} clientId={followingClientId} onStop={() => setFollowingClientId(null)} />
+      )}
 
       <div className="flex min-h-0 flex-1">
         <div className="min-h-0 min-w-0 flex-1">
@@ -369,6 +459,7 @@ export default function DocumentEditor() {
             documentId={currentDocument.id}
             initialContent={currentDocument.content}
             editable={currentDocument.role !== 'VIEWER'}
+            role={currentDocument.role}
             onDocumentRestored={() => {
               void fetchDocument(currentDocument.id);
               void refreshVersionSummary(currentDocument.id);
@@ -407,6 +498,16 @@ export default function DocumentEditor() {
           canRestore={currentDocument.role !== 'VIEWER'}
           onRestored={() => void fetchDocument(currentDocument.id)}
         />
+
+        <ParticipantsPanel
+          awareness={awareness}
+          isOpen={isParticipantsOpen}
+          onClose={() => setIsParticipantsOpen(false)}
+          currentUserRole={currentDocument.role}
+          followingClientId={followingClientId}
+          onFollow={setFollowingClientId}
+          onStopFollow={() => setFollowingClientId(null)}
+        />
       </div>
 
       <ShareDialog
@@ -417,6 +518,8 @@ export default function DocumentEditor() {
         currentUserRole={currentDocument.role}
         onLeft={() => navigate('/dashboard')}
       />
+
+      <KeyboardShortcutsDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
     </div>
   );
 }

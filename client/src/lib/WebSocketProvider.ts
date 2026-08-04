@@ -88,6 +88,8 @@ export interface WebSocketProviderOptions {
   awareness: Awareness;
   userId: string;
   userName: string;
+  /** Published in awareness so other clients can show a role badge (Owner/Editor/Viewer) for this user. */
+  userRole?: DocumentRole;
 }
 
 const PING_INTERVAL_VISIBLE_MS = 30000;
@@ -150,7 +152,7 @@ export class WebSocketProvider {
     // base state unconditionally, so our identity is always established.
     this.awareness.setLocalState({
       ...(this.awareness.getLocalState() ?? {}),
-      user: { name: options.userName, color, colorLight },
+      user: { name: options.userName, color, colorLight, role: options.userRole ?? null },
     });
 
     this.ydoc.on('update', this.handleDocUpdate);
@@ -591,6 +593,13 @@ export class WebSocketProvider {
     this.reconnectTimeout = setTimeout(() => {
       this.connect();
     }, delay);
+  }
+
+  /** Publishes a live role change (e.g. after ROLE_UPDATED) so other clients' role badges update too. */
+  updateLocalRole(role: DocumentRole) {
+    const current = this.awareness.getLocalState();
+    if (!current) return;
+    this.awareness.setLocalStateField('user', { ...(current.user as object), role });
   }
 
   /** Reset reconnect attempts and try again immediately (e.g. user clicked "Retry connection"). */

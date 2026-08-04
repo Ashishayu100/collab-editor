@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Awareness } from 'y-protocols/awareness';
+
+export type AwarenessRole = 'VIEWER' | 'EDITOR' | 'OWNER';
 
 export interface AwarenessUser {
   clientId: number;
@@ -7,25 +9,36 @@ export interface AwarenessUser {
   color: string;
   colorLight: string;
   typing: boolean;
+  role: AwarenessRole | null;
+  /** Timestamp of the last awareness change (cursor move, typing, etc.) seen for this client. */
+  lastActiveAt: number;
 }
 
 interface RawAwarenessState {
-  user?: { name?: string; color?: string; colorLight?: string };
+  user?: { name?: string; color?: string; colorLight?: string; role?: AwarenessRole | null };
   typing?: boolean;
 }
 
 /** Live list of remote users (the local client is excluded), updated on every awareness change. */
 export function useAwareness(awareness: Awareness | null): AwarenessUser[] {
   const [users, setUsers] = useState<AwarenessUser[]>([]);
+  const lastActiveRef = useRef<Map<number, number>>(new Map());
 
   useEffect(() => {
     const currentAwareness = awareness;
     if (!currentAwareness) {
       setUsers([]);
+      lastActiveRef.current.clear();
       return undefined;
     }
 
-    function updateUsers() {
+    function updateUsers(changed?: { added: number[]; updated: number[]; removed: number[] }) {
+      const now = Date.now();
+      if (changed) {
+        changed.added.concat(changed.updated).forEach((clientId) => lastActiveRef.current.set(clientId, now));
+        changed.removed.forEach((clientId) => lastActiveRef.current.delete(clientId));
+      }
+
       const states = currentAwareness!.getStates();
       const nextUsers: AwarenessUser[] = [];
 
@@ -42,6 +55,8 @@ export function useAwareness(awareness: Awareness | null): AwarenessUser[] {
           color: user.color,
           colorLight: typeof user.colorLight === 'string' ? user.colorLight : `${user.color}20`,
           typing: state.typing === true,
+          role: user.role ?? null,
+          lastActiveAt: lastActiveRef.current.get(clientId) ?? now,
         });
       });
 

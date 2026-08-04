@@ -1,13 +1,16 @@
+import CharacterCount from '@tiptap/extension-character-count';
 import Collaboration, { isChangeOrigin } from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import Placeholder from '@tiptap/extension-placeholder';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { AlertTriangle, Loader2, WifiOff } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Awareness } from 'y-protocols/awareness';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
 import { useIndexedDBSync } from '../../hooks/useIndexedDBSync';
+import { usePresenceToasts } from '../../hooks/usePresenceToasts';
+import { scrollToClientCursor } from '../../lib/awarenessScroll';
 import { getUserColor } from '../../lib/colors';
 import { applyYDocState, encodeYDocState } from '../../lib/yjs';
 import { ConnectionStatus, DocumentRestoredEvent, DocumentRole, WebSocketProvider } from '../../lib/WebSocketProvider';
@@ -16,8 +19,11 @@ import { useCommentStore } from '../../stores/commentStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useToastStore } from '../../stores/toastStore';
 import { CommentHighlight, commentHighlightPluginKey, computeCommentHighlightRanges } from './commentHighlightExtension';
+import { ConnectionBanner } from './ConnectionBanner';
 import { getContentExtensions } from './contentExtensions';
+import { RemoteCursorsOverlay } from './RemoteCursorsOverlay';
 import { Toolbar } from './Toolbar';
+import { TypingIndicator } from './TypingIndicator';
 import { YjsDebugPanel } from './YjsDebugPanel';
 import './editor.css';
 
@@ -41,6 +47,8 @@ export interface EditorProps {
   /** Base64-encoded Yjs state from the server, or null/legacy content for new or old documents. */
   initialContent?: string | null;
   editable?: boolean;
+  /** The current user's role on this document, published in awareness so others see a role badge. */
+  role: DocumentRole;
   /** Called for every connected client when the server reports a version restore completed. */
   onDocumentRestored?: (event: DocumentRestoredEvent) => void;
   /** Called when the server pushes a live role change for the current user on this document. */
@@ -56,6 +64,8 @@ export interface EditorProps {
 export interface EditorHandle {
   retrySave: () => void;
   retryConnection: () => void;
+  /** Scrolls the editor to a remote client's current cursor position, if resolvable. Returns whether it succeeded. */
+  scrollToClient: (clientId: number) => boolean;
 }
 
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
@@ -63,6 +73,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     documentId,
     initialContent,
     editable = true,
+    role,
     onDocumentRestored,
     onRoleChanged,
     onAccessRevoked,
@@ -76,6 +87,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   const setAwareness = useDocumentStore((state) => state.setAwareness);
   const setSaveIndicatorState = useDocumentStore((state) => state.setSaveIndicatorState);
   const setReconnectAttempts = useDocumentStore((state) => state.setReconnectAttempts);
+  const reconnectAttempts = useDocumentStore((state) => state.reconnectAttempts);
   const addToast = useToastStore((state) => state.addToast);
 
   const currentUserId = useAuthStore((state) => state.user?.id);
@@ -155,13 +167,23 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       awareness,
       userId: authUser.id,
       userName: authUser.name,
+      userRole: role,
     });
     setProvider(p);
 
     return () => {
       p.destroy();
     };
+    // `role` deliberately excluded — a live role change is pushed via provider.updateLocalRole()
+    // below rather than tearing down and reconnecting the whole WebSocket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ydoc, documentId, awareness]);
+
+  useEffect(() => {
+    provider?.updateLocalRole(role);
+  }, [provider, role]);
+
+  usePresenceToasts(awareness);
 
   const [connectionStatus, setLocalConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.DISCONNECTED);
   const [staleTabBanner, setStaleTabBanner] = useState(false);
@@ -299,18 +321,6 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     return () => clearInterval(interval);
   }, [provider, isDown, flushSave]);
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      retrySave: () => {
-        isDirtyRef.current = true;
-        flushSave();
-      },
-      retryConnection: () => provider?.retryConnection(),
-    }),
-    [flushSave, provider]
-  );
-
   const handleCommentHighlightClick = useCallback(
     (commentId: string) => {
       useCommentStore.getState().setActiveComment(commentId);
@@ -328,12 +338,22 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         CollaborationCaret.configure({
           provider: caretProvider,
           user: { name: currentUserName, color: currentUserColor.color },
+          // The visible caret + label are rendered by our own RemoteCursorsOverlay (which can
+          // animate smoothly between positions, unlike this extension's decoration widgets —
+          // see RemoteCursorsOverlay.tsx). This extension is kept active purely for the
+          // underlying mechanism: publishing the local user's cursor position into awareness.
+          render: () => {
+            const hidden = document.createElement('span');
+            hidden.style.display = 'none';
+            return hidden;
+          },
           selectionRender: (user: Record<string, unknown>) => ({
             style: `background-color: ${typeof user.colorLight === 'string' ? user.colorLight : `${String(user.color)}20`}`,
             class: 'collaboration-carets__selection',
           }),
         }),
         CommentHighlight.configure({ onCommentClick: handleCommentHighlightClick }),
+        CharacterCount,
       ],
       editable,
       immediatelyRender: false,
@@ -380,6 +400,20 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     const tr = editor.state.tr.setMeta(commentHighlightPluginKey, { ranges, activeCommentId });
     editor.view.dispatch(tr);
   }, [editor, comments, activeCommentId]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      retrySave: () => {
+        isDirtyRef.current = true;
+        flushSave();
+      },
+      retryConnection: () => provider?.retryConnection(),
+      scrollToClient: (clientId) =>
+        editor ? scrollToClientCursor(editor, awareness, clientId, scrollContainerRef.current) : false,
+    }),
+    [flushSave, provider, editor, awareness]
+  );
 
   const handleStartComment = useCallback(() => {
     if (!editor) return;
@@ -453,8 +487,16 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     );
   }
 
+  const wordCount = (editor.storage.characterCount as { words: () => number } | undefined)?.words() ?? 0;
+  const charCount = (editor.storage.characterCount as { characters: () => number } | undefined)?.characters() ?? 0;
+
   return (
     <div className="flex h-full flex-col">
+      <ConnectionBanner
+        status={connectionStatus}
+        reconnectAttempts={reconnectAttempts}
+        onReconnect={() => provider?.retryConnection()}
+      />
       <Toolbar editor={editor} readOnly={!editable} onComment={editable ? handleStartComment : undefined} />
       {!editable && (
         <div className="flex items-center justify-center gap-2 border-b border-gray-200 bg-gray-50 px-4 py-1.5 text-xs font-medium text-gray-500">
@@ -467,27 +509,28 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
           <span>You&apos;ve been away for a while. Your changes are safe locally and will sync now.</span>
         </div>
       )}
-      {(connectionStatus === ConnectionStatus.OFFLINE || connectionStatus === ConnectionStatus.FAILED) && (
-        <div className="flex items-center justify-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          <WifiOff size={16} />
-          <span>
-            {connectionStatus === ConnectionStatus.FAILED
-              ? 'Connection failed. Your changes are saved locally.'
-              : "You're offline. Changes are saved locally and will sync when reconnected."}
-          </span>
-          <button
-            type="button"
-            onClick={() => provider?.retryConnection()}
-            className="rounded bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 transition-colors duration-150 hover:bg-amber-200"
-          >
-            Retry connection
-          </button>
-        </div>
-      )}
+      <TypingIndicator awareness={awareness} />
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[720px] px-8 py-10">
+        <div className="relative mx-auto max-w-[720px] px-8 py-10">
           <EditorContent editor={editor} />
+          <RemoteCursorsOverlay editor={editor} awareness={awareness} />
         </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 border-t border-gray-200 bg-[#F9FAFB] px-4 py-1 text-[11px] text-gray-500">
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+            connectionStatus === ConnectionStatus.CONNECTED
+              ? 'bg-green-500'
+              : connectionStatus === ConnectionStatus.RECONNECTING || connectionStatus === ConnectionStatus.CONNECTING || connectionStatus === ConnectionStatus.SYNCING
+                ? 'bg-amber-500'
+                : 'bg-red-500'
+          }`}
+          title={connectionStatus}
+        />
+        <span className="flex-1" />
+        <span>
+          {wordCount} {wordCount === 1 ? 'word' : 'words'} · {charCount} {charCount === 1 ? 'character' : 'characters'}
+        </span>
       </div>
       {import.meta.env.DEV && provider && (
         <YjsDebugPanel
