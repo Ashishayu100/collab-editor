@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const icons = require\\('lucide-react'\\); const names=['Indent','Outdent','ChevronDown','MoreHorizontal','MoreVertical','Printer','Eraser','FileDown','FileText','FileType','FileJson','FileCode','IndentIncrease','IndentDecrease','Highlighter','PaintBucket','Palette']; names.forEach\\(n => console.log\\(n, typeof icons[n]\\)\\);\")",
+      "Bash(npm run *)",
+      "Bash(node -e \"console.log\\(require\\('./server/node_modules/puppeteer/package.json'\\).version\\)\")",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/puppeteer/package.json'\\).version\\)\")",
+      "Bash(command -v chromium-cli)",
+      "Bash(mkdir -p 'C:\\\\Users\\\\Ashish\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Ashish-OneDrive-Desktop-real-time-collaborative-document-editor\\\\dfa875d2-aa47-4624-9376-1d78fb778e8d\\\\scratchpad')",
+      "Bash(npm init *)",
+      "Bash(npm install *)",
+      "Bash(npx playwright *)",
+      "Bash(node -e ' *)",
+      "Bash(node smoketest.js)",
+      "Bash(node smoketest2.js)",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 3001,5173 -State Listen -ErrorAction SilentlyContinue\")"
+    ]
+  }
+}

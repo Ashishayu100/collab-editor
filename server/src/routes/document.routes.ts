@@ -16,6 +16,7 @@ import { requireDocumentAccess } from '../middleware/requireDocumentAccess';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 import commentRoutes from './comment.routes';
+import exportRoutes from './export.routes';
 import versionRoutes from './version.routes';
 
 const router = Router();
@@ -114,5 +115,6 @@ router.patch(
 router.delete('/:id', validate(idParamSchema), requireDocumentAccess('OWNER'), asyncHandler(deleteDocumentHandler));
 router.use('/:id/versions', versionRoutes);
 router.use('/:id/comments', commentRoutes);
+router.use('/:id/export', exportRoutes);
 
 export default router;

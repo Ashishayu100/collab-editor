@@ -4,20 +4,32 @@ import {
   AlignLeft,
   AlignRight,
   Bold,
+  Check,
+  ChevronDown,
   Code,
+  Eraser,
+  FileCode,
+  FileDown,
+  FileType,
   Heading1,
   Heading2,
   Heading3,
   Highlighter,
+  Image as ImageIcon,
+  Indent,
   Italic,
   Link2,
   List,
   ListOrdered,
   ListTodo,
+  Loader2,
   LucideIcon,
   MessageSquarePlus,
   Minus,
+  MoreHorizontal,
+  Outdent,
   Pilcrow,
+  Printer,
   Quote,
   Redo2,
   SquareCode,
@@ -25,8 +37,14 @@ import {
   Underline as UnderlineIcon,
   Undo2,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { downloadDocumentExport, ExportFormat } from '../../api/exportApi';
+import { useOutsideClick } from '../../hooks/useOutsideClick';
+import { useDocumentStore } from '../../stores/documentStore';
+import { useToastStore } from '../../stores/toastStore';
 import { cn } from '../../lib/utils';
+import { getErrorMessage } from '../../lib/utils';
+import { LinkBubbleMenu } from './LinkBubbleMenu';
 import { LinkModal } from './LinkModal';
 
 interface ToolbarProps {
@@ -71,8 +89,250 @@ function Divider() {
   return <div className="mx-1 h-6 w-px shrink-0 bg-gray-300" aria-hidden />;
 }
 
+const BLOCK_TYPE_OPTIONS = [
+  { key: 'paragraph', label: 'Normal text' },
+  { key: 'heading1', label: 'Heading 1' },
+  { key: 'heading2', label: 'Heading 2' },
+  { key: 'heading3', label: 'Heading 3' },
+  { key: 'bulletList', label: 'Bullet List' },
+  { key: 'orderedList', label: 'Numbered List' },
+  { key: 'taskList', label: 'Task List' },
+  { key: 'codeBlock', label: 'Code Block' },
+  { key: 'blockquote', label: 'Blockquote' },
+] as const;
+
+type BlockTypeKey = (typeof BLOCK_TYPE_OPTIONS)[number]['key'];
+
+function applyBlockType(editor: Editor, key: BlockTypeKey) {
+  const chain = editor.chain().focus();
+  switch (key) {
+    case 'paragraph':
+      chain.setParagraph().run();
+      break;
+    case 'heading1':
+      chain.toggleHeading({ level: 1 }).run();
+      break;
+    case 'heading2':
+      chain.toggleHeading({ level: 2 }).run();
+      break;
+    case 'heading3':
+      chain.toggleHeading({ level: 3 }).run();
+      break;
+    case 'bulletList':
+      chain.toggleBulletList().run();
+      break;
+    case 'orderedList':
+      chain.toggleOrderedList().run();
+      break;
+    case 'taskList':
+      chain.toggleTaskList().run();
+      break;
+    case 'codeBlock':
+      chain.toggleCodeBlock().run();
+      break;
+    case 'blockquote':
+      chain.toggleBlockquote().run();
+      break;
+  }
+}
+
+function BlockTypeDropdown({ editor, currentKey }: { editor: Editor; currentKey: BlockTypeKey }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useOutsideClick(containerRef, () => setOpen(false), open);
+
+  const currentLabel = BLOCK_TYPE_OPTIONS.find((o) => o.key === currentKey)?.label ?? 'Normal text';
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-8 min-w-[132px] shrink-0 items-center justify-between gap-1.5 rounded-md px-2.5 text-sm text-gray-700 transition-colors duration-150 hover:bg-gray-200"
+      >
+        <span className="truncate">{currentLabel}</span>
+        <ChevronDown size={14} className="shrink-0 text-gray-400" />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 w-44 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+          {BLOCK_TYPE_OPTIONS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                applyBlockType(editor, option.key);
+                setOpen(false);
+              }}
+              className={cn(
+                'flex w-full items-center justify-between px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50',
+                option.key === currentKey && 'font-medium text-primary'
+              )}
+            >
+              {option.label}
+              {option.key === currentKey && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const HIGHLIGHT_COLORS = [
+  { name: 'Yellow', value: '#fef08a' },
+  { name: 'Green', value: '#bbf7d0' },
+  { name: 'Blue', value: '#bfdbfe' },
+  { name: 'Pink', value: '#fbcfe8' },
+  { name: 'Orange', value: '#fed7aa' },
+  { name: 'Purple', value: '#e9d5ff' },
+];
+
+function HighlightDropdown({ editor, isActive, currentColor }: { editor: Editor; isActive: boolean; currentColor: string }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useOutsideClick(containerRef, () => setOpen(false), open);
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        title="Highlight"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          'flex h-8 w-8 shrink-0 flex-col items-center justify-center gap-0.5 rounded-md text-gray-600 transition-colors duration-150 hover:bg-gray-200',
+          isActive && 'bg-blue-100 text-primary hover:bg-blue-100'
+        )}
+      >
+        <Highlighter size={16} />
+        <span
+          className="h-[3px] w-4 rounded-full"
+          style={{ backgroundColor: isActive && currentColor ? currentColor : '#d1d5db' }}
+        />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-20 mt-1 flex w-44 flex-wrap gap-1.5 rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+          {HIGHLIGHT_COLORS.map((color) => (
+            <button
+              key={color.value}
+              type="button"
+              title={color.name}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                editor.chain().focus().toggleHighlight({ color: color.value }).run();
+                setOpen(false);
+              }}
+              className="h-6 w-6 shrink-0 rounded-full border border-black/10 transition-transform duration-100 hover:scale-110"
+              style={{ backgroundColor: color.value }}
+            />
+          ))}
+          <button
+            type="button"
+            title="None"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              editor.chain().focus().unsetHighlight().run();
+              setOpen(false);
+            }}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-gray-300 bg-white text-gray-400 hover:bg-gray-50"
+          >
+            <span className="h-px w-3.5 rotate-45 bg-gray-400" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const EXPORT_OPTIONS: { format: ExportFormat; label: string; icon: LucideIcon }[] = [
+  { format: 'pdf', label: 'PDF', icon: FileDown },
+  { format: 'markdown', label: 'Markdown', icon: FileCode },
+  { format: 'html', label: 'HTML', icon: FileType },
+];
+
+function MoreMenu({ editor, documentId }: { editor: Editor; documentId?: string }) {
+  const [open, setOpen] = useState(false);
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useOutsideClick(containerRef, () => setOpen(false), open);
+  const documentTitle = useDocumentStore((state) => state.currentDocument?.title ?? 'Untitled Document');
+  const addToast = useToastStore((state) => state.addToast);
+
+  async function handleExport(format: ExportFormat) {
+    if (!documentId || exporting) return;
+    setExporting(format);
+    try {
+      await downloadDocumentExport(documentId, format, editor.getHTML(), documentTitle);
+    } catch (error) {
+      addToast(getErrorMessage(error), 'error');
+    } finally {
+      setExporting(null);
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <ToolbarButton label="More" icon={MoreHorizontal} onClick={() => setOpen((o) => !o)} />
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              editor.chain().focus().clearNodes().unsetAllMarks().run();
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+          >
+            <Eraser size={14} className="text-gray-400" /> Clear formatting
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setOpen(false);
+              window.print();
+            }}
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+          >
+            <Printer size={14} className="text-gray-400" /> Print
+          </button>
+
+          {documentId && (
+            <>
+              <div className="my-1 h-px bg-gray-100" />
+              <div className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Export</div>
+              {EXPORT_OPTIONS.map(({ format, label, icon: Icon }) => (
+                <button
+                  key={format}
+                  type="button"
+                  disabled={exporting !== null}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => void handleExport(format)}
+                  className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {exporting === format ? (
+                    <Loader2 size={14} className="animate-spin text-gray-400" />
+                  ) : (
+                    <Icon size={14} className="text-gray-400" />
+                  )}
+                  Export as {label}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
   const [linkModalOpen, setLinkModalOpen] = useState(false);
+  const documentId = useDocumentStore((state) => state.currentDocument?.id);
 
   const state = useEditorState({
     editor,
@@ -82,6 +342,7 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
       underline: editor.isActive('underline'),
       strike: editor.isActive('strike'),
       highlight: editor.isActive('highlight'),
+      highlightColor: (editor.getAttributes('highlight').color as string | undefined) ?? '',
       code: editor.isActive('code'),
       heading1: editor.isActive('heading', { level: 1 }),
       heading2: editor.isActive('heading', { level: 2 }),
@@ -99,8 +360,28 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
       linkHref: (editor.getAttributes('link').href as string | undefined) ?? '',
       canUndo: editor.can().undo(),
       canRedo: editor.can().redo(),
+      canIndent: editor.can().sinkListItem('listItem'),
+      canOutdent: editor.can().liftListItem('listItem'),
     }),
   });
+
+  const currentBlockType: BlockTypeKey = state.heading1
+    ? 'heading1'
+    : state.heading2
+      ? 'heading2'
+      : state.heading3
+        ? 'heading3'
+        : state.bulletList
+          ? 'bulletList'
+          : state.orderedList
+            ? 'orderedList'
+            : state.taskList
+              ? 'taskList'
+              : state.codeBlock
+                ? 'codeBlock'
+                : state.blockquote
+                  ? 'blockquote'
+                  : 'paragraph';
 
   return (
     <div
@@ -124,6 +405,10 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
         disabled={!state.canRedo}
         onClick={() => editor.chain().focus().redo().run()}
       />
+
+      <Divider />
+
+      <BlockTypeDropdown editor={editor} currentKey={currentBlockType} />
 
       <Divider />
 
@@ -155,13 +440,7 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
         isActive={state.strike}
         onClick={() => editor.chain().focus().toggleStrike().run()}
       />
-      <ToolbarButton
-        label="Highlight"
-        shortcut="Ctrl+Shift+H"
-        icon={Highlighter}
-        isActive={state.highlight}
-        onClick={() => editor.chain().focus().toggleHighlight().run()}
-      />
+      <HighlightDropdown editor={editor} isActive={state.highlight} currentColor={state.highlightColor} />
       <ToolbarButton
         label="Inline code"
         shortcut="Ctrl+E"
@@ -173,28 +452,22 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
       <Divider />
 
       <ToolbarButton
-        label="Heading 1"
-        icon={Heading1}
-        isActive={state.heading1}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+        label="Align left"
+        icon={AlignLeft}
+        isActive={state.alignLeft}
+        onClick={() => editor.chain().focus().setTextAlign('left').run()}
       />
       <ToolbarButton
-        label="Heading 2"
-        icon={Heading2}
-        isActive={state.heading2}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+        label="Align center"
+        icon={AlignCenter}
+        isActive={state.alignCenter}
+        onClick={() => editor.chain().focus().setTextAlign('center').run()}
       />
       <ToolbarButton
-        label="Heading 3"
-        icon={Heading3}
-        isActive={state.heading3}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-      />
-      <ToolbarButton
-        label="Normal text"
-        icon={Pilcrow}
-        isActive={state.paragraph}
-        onClick={() => editor.chain().focus().setParagraph().run()}
+        label="Align right"
+        icon={AlignRight}
+        isActive={state.alignRight}
+        onClick={() => editor.chain().focus().setTextAlign('right').run()}
       />
 
       <Divider />
@@ -221,22 +494,16 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
       <Divider />
 
       <ToolbarButton
-        label="Align left"
-        icon={AlignLeft}
-        isActive={state.alignLeft}
-        onClick={() => editor.chain().focus().setTextAlign('left').run()}
+        label="Indent"
+        icon={Indent}
+        disabled={!state.canIndent}
+        onClick={() => editor.chain().focus().sinkListItem('listItem').run()}
       />
       <ToolbarButton
-        label="Align center"
-        icon={AlignCenter}
-        isActive={state.alignCenter}
-        onClick={() => editor.chain().focus().setTextAlign('center').run()}
-      />
-      <ToolbarButton
-        label="Align right"
-        icon={AlignRight}
-        isActive={state.alignRight}
-        onClick={() => editor.chain().focus().setTextAlign('right').run()}
+        label="Outdent"
+        icon={Outdent}
+        disabled={!state.canOutdent}
+        onClick={() => editor.chain().focus().liftListItem('listItem').run()}
       />
 
       <Divider />
@@ -280,6 +547,14 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
           />
         )}
       </div>
+      <ToolbarButton
+        label="Image"
+        icon={ImageIcon}
+        onClick={() => {
+          const url = window.prompt('Image URL:');
+          if (url) editor.chain().focus().setImage({ src: url }).run();
+        }}
+      />
 
       {onComment && (
         <>
@@ -287,6 +562,12 @@ export function Toolbar({ editor, readOnly = false, onComment }: ToolbarProps) {
           <ToolbarButton label="Comment" shortcut="Ctrl+Alt+M" icon={MessageSquarePlus} onClick={onComment} />
         </>
       )}
+
+      <Divider />
+
+      <MoreMenu editor={editor} documentId={documentId} />
+
+      <LinkBubbleMenu editor={editor} />
     </div>
   );
 }

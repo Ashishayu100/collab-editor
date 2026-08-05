@@ -8,6 +8,8 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { Awareness } from 'y-protocols/awareness';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
+import 'tippy.js/dist/tippy.css';
+import { SlashCommand } from '../../extensions/SlashCommand';
 import { useIndexedDBSync } from '../../hooks/useIndexedDBSync';
 import { usePresenceToasts } from '../../hooks/usePresenceToasts';
 import { scrollToClientCursor } from '../../lib/awarenessScroll';
@@ -354,6 +356,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
         }),
         CommentHighlight.configure({ onCommentClick: handleCommentHighlightClick }),
         CharacterCount,
+        SlashCommand,
       ],
       editable,
       immediatelyRender: false,
