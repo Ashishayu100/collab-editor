@@ -13,7 +13,27 @@
       "Bash(node -e ' *)",
       "Bash(node smoketest.js)",
       "Bash(node smoketest2.js)",
-      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 3001,5173 -State Listen -ErrorAction SilentlyContinue\")"
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 3001,5173 -State Listen -ErrorAction SilentlyContinue\")",
+      "Bash(chmod +x \"c:/Users/Ashish/OneDrive/Desktop/real-time-collaborative-document-editor/server/scripts/test-scaling.sh\")",
+      "Bash(docker start *)",
+      "PowerShell(Stop-Process -Id 30620,30904 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 3001,5173 -State Listen -ErrorAction SilentlyContinue)",
+      "Bash(curl -s http://localhost:3001/api/health)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',\\(\\)=>console.log\\(JSON.stringify\\(JSON.parse\\(d\\),null,2\\)\\)\\)\")",
+      "Bash(grep -n \"ws://\\\\|wss://\\\\|VITE_\\\\|proxy\" client/vite.config.ts client/src/lib/WebSocketProvider.ts)",
+      "Bash(PORT=3002 node dist/index.js)",
+      "Bash(NODE_PATH='__CMDSUB_OUTPUT__/node_modules;__CMDSUB_OUTPUT__/server/node_modules' node 'C:\\\\Users\\\\Ashish\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Ashish-OneDrive-Desktop-real-time-collaborative-document-editor\\\\dfa875d2-aa47-4624-9376-1d78fb778e8d\\\\scratchpad/redis-scaling-test.js')",
+      "Bash(cp 'C:\\\\Users\\\\Ashish\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Ashish-OneDrive-Desktop-real-time-collaborative-document-editor\\\\dfa875d2-aa47-4624-9376-1d78fb778e8d\\\\scratchpad/redis-scaling-test.js' c:/Users/Ashish/OneDrive/Desktop/real-time-collaborative-document-editor/server/redis-scaling-test.tmp.js)",
+      "Bash(node redis-scaling-test.tmp.js)",
+      "Bash(docker stop *)",
+      "Bash(time curl -s http://localhost:3001/api/health)",
+      "Bash(cp 'C:\\\\Users\\\\Ashish\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Ashish-OneDrive-Desktop-real-time-collaborative-document-editor\\\\dfa875d2-aa47-4624-9376-1d78fb778e8d\\\\scratchpad/single-instance-degraded-test.js' c:/Users/Ashish/OneDrive/Desktop/real-time-collaborative-document-editor/server/degraded-test.tmp.js)",
+      "Bash(node degraded-test.tmp.js)",
+      "Bash(rm -f degraded-test.tmp.js)",
+      "Bash(curl -s http://localhost:3001/api/health -m 3)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(curl -s -m 5 http://localhost:3001/api/health)",
+      "Bash(rm -f redis-scaling-test.tmp.js)"
     ]
   }
 }

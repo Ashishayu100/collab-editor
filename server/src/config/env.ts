@@ -10,6 +10,9 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3001),
   CLIENT_URL: z.string().min(1).default('http://localhost:5173'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  REDIS_HOST: z.string().min(1).default('localhost'),
+  REDIS_PORT: z.coerce.number().default(6379),
+  REDIS_PASSWORD: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

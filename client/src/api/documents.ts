@@ -53,7 +53,11 @@ export interface DocumentListItem {
   myCollaboratorId: string | null;
   collaboratorCount: number;
   collaborators: DocumentCollaboratorSummary[];
+  /** Presence on THIS server instance only (name + color, for avatar dots) — may undercount
+   *  under horizontal scaling if editors are connected to a different instance. */
   activeUsers: ActiveUser[];
+  /** Cross-server active-user count from Redis — the source of truth for "N editing" badges. */
+  activeUserCount: number;
   /** Whether the current user has starred this document — per-user, not document-global. */
   starred: boolean;
   folder: DocumentFolderRef | null;

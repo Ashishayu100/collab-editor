@@ -1,0 +1,45 @@
+# Example Nginx upstream config for horizontal scaling.
+# Reference only — not wired into local dev. Revisit when this project reaches deployment.
+
+upstream collab_backend {
+    # ip_hash for sticky sessions — ensures WebSocket connections from the same client
+    # always hit the same server instance. Not required for correctness now that Redis
+    # relays sync/awareness/comment events across instances, but it avoids the extra
+    # hop and keeps reconnect logic simpler.
+    ip_hash;
+
+    server 127.0.0.1:3001;
+    server 127.0.0.1:3002;
+    # Add more instances as needed
+}
+
+server {
+    listen 80;
+    server_name collab.example.com;
+
+    # REST API
+    location /api/ {
+        proxy_pass http://collab_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket upgrade
+    location /ws {
+        proxy_pass http://collab_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 86400s; # Keep WebSocket alive for 24h
+        proxy_send_timeout 86400s;
+    }
+
+    # Client static files (in production, serve from a CDN or a separate container)
+    location / {
+        proxy_pass http://localhost:5173;
+    }
+}

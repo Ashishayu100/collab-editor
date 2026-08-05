@@ -108,13 +108,13 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave, onToggleStar, o
     >
       <div className="relative mb-6 flex h-24 items-center justify-center rounded-lg bg-gray-50">
         <FileText className="text-gray-300" size={32} />
-        {doc.activeUsers.length > 0 && (
+        {doc.activeUserCount > 0 && (
           <div
-            title={doc.activeUsers.map((u) => u.name).join(', ')}
+            title={doc.activeUsers.length > 0 ? doc.activeUsers.map((u) => u.name).join(', ') : undefined}
             className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-white/95 px-2 py-0.5 text-[11px] font-medium text-green-700 shadow-sm"
           >
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
-            {doc.activeUsers.length === 1 ? '1 editing' : `${doc.activeUsers.length} editing`}
+            {doc.activeUserCount === 1 ? '1 editing' : `${doc.activeUserCount} editing`}
           </div>
         )}
         <span

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   createDocumentHandler,
   deleteDocumentHandler,
+  getActiveUsersHandler,
   getDocumentHandler,
   listDocumentsHandler,
   moveDocumentHandler,
@@ -88,6 +89,12 @@ router.post('/', validate(createDocumentSchema), asyncHandler(createDocumentHand
 // Must be registered before /:id — otherwise Express would match "search" as the :id param.
 router.get('/search', validate(searchQuerySchema), asyncHandler(searchDocumentsHandler));
 router.get('/:id', validate(idParamSchema), requireDocumentAccess('VIEWER'), asyncHandler(getDocumentHandler));
+router.get(
+  '/:id/active-users',
+  validate(idParamSchema),
+  requireDocumentAccess('VIEWER'),
+  asyncHandler(getActiveUsersHandler)
+);
 router.patch(
   '/:id',
   validate(updateTitleSchema),

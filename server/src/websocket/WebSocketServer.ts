@@ -20,9 +20,16 @@ import * as Y from 'yjs';
 import { Role } from '@prisma/client';
 import { prisma } from '../config/database';
 import { checkDocumentAccess } from '../services/document.service';
+import { RedisDocumentTracker } from '../services/RedisDocumentTracker';
+import { RedisMessage, RedisPubSub } from '../services/RedisPubSub';
 import { createVersion, shouldAutoSnapshot } from '../services/versionService';
 import { verifyAccessToken } from '../utils/jwt';
 import { CommentEvent } from '../types/comment';
+
+/** Tag applied to Y.Doc/Awareness updates applied from a Redis message, so the `update`
+ *  listeners below know not to republish them (which would echo the change back and forth
+ *  between server instances forever). */
+const REDIS_ORIGIN = 'redis';
 
 // Message type registry (shared with client/src/lib/WebSocketProvider.ts):
 //   0 = Yjs sync (sync step 1 / sync step 2 / update, per y-protocols/sync)
@@ -96,9 +103,13 @@ export class CollabWebSocketServer {
   private wss: WSServer;
   private rooms: Map<string, DocumentRoom> = new Map();
   private periodicSaveInterval: ReturnType<typeof setInterval>;
+  private redisPubSub: RedisPubSub;
+  private documentTracker: RedisDocumentTracker;
 
-  constructor(httpServer: HTTPServer) {
+  constructor(httpServer: HTTPServer, redisPubSub: RedisPubSub, documentTracker: RedisDocumentTracker) {
     this.wss = new WSServer({ noServer: true });
+    this.redisPubSub = redisPubSub;
+    this.documentTracker = documentTracker;
 
     httpServer.on('upgrade', (request, socket, head) => {
       void this.handleUpgrade(request, socket, head);
@@ -109,6 +120,10 @@ export class CollabWebSocketServer {
         if (room.hasUnsavedChanges) {
           void this.saveDocument(room);
         }
+        // Keeps the cross-server active-user hash alive well within its 120s TTL — a server
+        // that crashes without running its shutdown handler just stops refreshing, so its
+        // entries age out on their own instead of lingering forever.
+        void this.documentTracker.refreshTTL(room.docId);
       });
     }, PERIODIC_SAVE_INTERVAL_MS);
   }
@@ -216,6 +231,14 @@ export class CollabWebSocketServer {
 
       room.hasUnsavedChanges = true;
       this.scheduleSave(room);
+
+      // Updates replayed from Redis (origin === REDIS_ORIGIN) must not be published back —
+      // that would echo the change between server instances forever.
+      if (origin !== REDIS_ORIGIN) {
+        this.redisPubSub.publishYjsSync(room.docId, update).catch((err) => {
+          console.error(`[WS] Redis sync publish failed for doc ${room.docId}:`, err);
+        });
+      }
     });
 
     room.awareness.on(
@@ -234,9 +257,11 @@ export class CollabWebSocketServer {
         const changedClients = added.concat(updated, removed);
         if (changedClients.length === 0) return;
 
+        const awarenessUpdate = encodeAwarenessUpdate(room.awareness, changedClients);
+
         const encoder = encoding.createEncoder();
         encoding.writeVarUint(encoder, MessageType.AWARENESS);
-        encoding.writeVarUint8Array(encoder, encodeAwarenessUpdate(room.awareness, changedClients));
+        encoding.writeVarUint8Array(encoder, awarenessUpdate);
         const message = encoding.toUint8Array(encoder);
 
         room.clients.forEach((_client, ws) => {
@@ -244,12 +269,47 @@ export class CollabWebSocketServer {
             ws.send(message);
           }
         });
+
+        if (origin !== REDIS_ORIGIN) {
+          this.redisPubSub.publishAwareness(room.docId, awarenessUpdate).catch((err) => {
+            console.error(`[WS] Redis awareness publish failed for doc ${room.docId}:`, err);
+          });
+        }
       }
     );
 
     this.rooms.set(documentId, room);
+
+    await this.redisPubSub.subscribe(documentId, (message) => this.handleRedisMessage(documentId, message));
+
     console.log(`[WS] Room created for document ${documentId}`);
     return room;
+  }
+
+  /** Applies a message published by another server instance to this server's local room state. */
+  private handleRedisMessage(documentId: string, message: RedisMessage): void {
+    const room = this.rooms.get(documentId);
+    if (!room) return; // Room was destroyed locally between publish and delivery — nothing to apply.
+
+    switch (message.type) {
+      case 'yjs-sync': {
+        const update = new Uint8Array(Buffer.from(message.payload, 'base64'));
+        Y.applyUpdate(room.ydoc, update, REDIS_ORIGIN);
+        break;
+      }
+      case 'yjs-awareness': {
+        const update = new Uint8Array(Buffer.from(message.payload, 'base64'));
+        applyAwarenessUpdate(room.awareness, update, REDIS_ORIGIN);
+        break;
+      }
+      case 'comment-event': {
+        const event = JSON.parse(message.payload) as CommentEvent;
+        this.broadcastCommentEventToLocalClients(documentId, event);
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   private handleConnection(
@@ -277,6 +337,8 @@ export class CollabWebSocketServer {
 
     const client: ClientConnection = { ws, userId, userName, userColor, documentId, role, ownedClientIds: new Set() };
     room.clients.set(ws, client);
+
+    void this.documentTracker.addActiveUser(documentId, userId, userName);
 
     console.log(`[WS] Client connected: userId=${userId}, documentId=${documentId} (room has ${room.clients.size} clients)`);
 
@@ -368,6 +430,13 @@ export class CollabWebSocketServer {
       removeAwarenessStates(room.awareness, Array.from(client.ownedClientIds), null);
     }
 
+    // Only clear this user's tracker entry once none of their other tabs/connections remain in
+    // this room — a second open tab on the same document must not make them vanish from "N editing".
+    const stillConnected = Array.from(room.clients.values()).some((c) => c.userId === userId);
+    if (!stillConnected) {
+      void this.documentTracker.removeActiveUser(room.docId, userId);
+    }
+
     console.log(`[WS] Client disconnected: userId=${userId}, documentId=${room.docId} (room has ${room.clients.size} clients remaining)`);
 
     if (room.clients.size === 0) {
@@ -397,6 +466,10 @@ export class CollabWebSocketServer {
       this.rooms.delete(room.docId);
     }
     room.ydoc.destroy();
+
+    await this.redisPubSub.unsubscribe(room.docId);
+    await this.documentTracker.removeAllServerUsers(room.docId);
+
     console.log(`[WS] Room destroyed for document ${room.docId} (empty for ${EMPTY_ROOM_CLEANUP_MS / 1000}s)`);
   }
 
@@ -542,6 +615,19 @@ export class CollabWebSocketServer {
    * polling. Returns whether a live room existed to notify.
    */
   public broadcastCommentEvent(documentId: string, event: CommentEvent): boolean {
+    const delivered = this.broadcastCommentEventToLocalClients(documentId, event);
+
+    this.redisPubSub.publishCommentEvent(documentId, event).catch((err) => {
+      console.error(`[WS] Redis comment publish failed for doc ${documentId}:`, err);
+    });
+
+    return delivered;
+  }
+
+  /** Sends a comment event to this server's own connected clients only — used both for local
+   *  REST mutations (via broadcastCommentEvent above) and for events replayed from Redis, which
+   *  must never be re-published or every instance would echo them back and forth forever. */
+  private broadcastCommentEventToLocalClients(documentId: string, event: CommentEvent): boolean {
     const room = this.rooms.get(documentId);
     if (!room) return false;
 

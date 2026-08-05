@@ -1,13 +1,18 @@
 import cors from 'cors';
 import express from 'express';
 import { createServer } from 'http';
+import { createRedisClient } from './config/redis';
 import { env } from './config/env';
+import { prisma } from './config/database';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestLogger } from './middleware/requestLogger';
 import authRoutes from './routes/auth.routes';
 import documentRoutes from './routes/document.routes';
 import folderRoutes from './routes/folder.routes';
 import { documentSharingRoutes, shareAcceptRoutes } from './routes/sharing';
+import { RedisDocumentTracker } from './services/RedisDocumentTracker';
+import { RedisPubSub } from './services/RedisPubSub';
+import { setDocumentTracker } from './services/documentTrackerRegistry';
 import { CollabWebSocketServer } from './websocket/WebSocketServer';
 import { setWebSocketServer } from './websocket/registry';
 
@@ -22,8 +27,41 @@ app.use(
 app.use(express.json());
 app.use(requestLogger);
 
-app.get('/api/health', (_req, res) => {
-  res.status(200).json({ status: 'ok' });
+// Redis is a scaling/presence enhancement, never a hard dependency — a single instance with no
+// Redis at all keeps working (see RedisPubSub/RedisDocumentTracker's internal graceful degradation).
+const redisPubSub = new RedisPubSub();
+const redisClient = createRedisClient();
+const documentTracker = new RedisDocumentTracker(redisClient, redisPubSub.getServerId());
+setDocumentTracker(documentTracker);
+
+// Deferred so the initial connection handshake (typically well under a second) has a chance to
+// finish first — checking at t=0 would otherwise almost always report "unavailable" against a
+// perfectly healthy Redis that just hasn't connected yet.
+setTimeout(() => {
+  void redisPubSub.healthCheck().then((healthy) => {
+    if (!healthy) {
+      console.warn('[Redis] unavailable — running in single-server mode. Cross-server collaboration disabled.');
+    }
+  });
+}, 1500);
+
+app.get('/api/health', async (_req, res) => {
+  const redisHealthy = await redisPubSub.healthCheck();
+  const dbHealthy = await prisma
+    .$queryRaw`SELECT 1`
+    .then(() => true)
+    .catch(() => false);
+
+  const status = redisHealthy && dbHealthy ? 'healthy' : 'degraded';
+
+  res.status(status === 'healthy' ? 200 : 503).json({
+    status,
+    serverId: redisPubSub.getServerId(),
+    redis: redisHealthy ? 'connected' : 'disconnected',
+    database: dbHealthy ? 'connected' : 'disconnected',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.use('/api/auth', authRoutes);
@@ -36,7 +74,7 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 const httpServer = createServer(app);
-const collabServer = new CollabWebSocketServer(httpServer);
+const collabServer = new CollabWebSocketServer(httpServer, redisPubSub, documentTracker);
 setWebSocketServer(collabServer);
 
 httpServer.listen(env.PORT, () => {
@@ -60,6 +98,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
   forceExitTimeout.unref();
 
   await collabServer.shutdown();
+
+  await documentTracker.cleanupServer();
+  await redisPubSub.shutdown();
+  await redisClient.quit().catch(() => undefined);
 
   httpServer.close(() => process.exit(0));
 }

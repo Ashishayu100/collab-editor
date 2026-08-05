@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import * as documentService from '../services/document.service';
+import { getDocumentTracker } from '../services/documentTrackerRegistry';
 import { ApiError } from '../utils/ApiError';
 import { getWebSocketServer } from '../websocket/registry';
 
@@ -33,9 +34,17 @@ export async function listDocumentsHandler(req: Request, res: Response): Promise
   });
 
   const wsServer = getWebSocketServer();
+  // `activeUsers` (name + color, for avatar dots) only reflects rooms live on THIS server
+  // instance. `activeUserCount` is the cross-server truth from Redis — the one the dashboard's
+  // "N editing" badge should trust, since a document's editors may be connected to a different
+  // instance than the one serving this request.
+  const tracker = getDocumentTracker();
+  const activeUserCounts = tracker ? await tracker.getActiveUserCounts(documents.map((doc) => doc.id)) : new Map();
+
   const documentsWithPresence = documents.map((doc) => ({
     ...doc,
     activeUsers: wsServer?.getActiveUsers(doc.id) ?? [],
+    activeUserCount: activeUserCounts.get(doc.id) ?? 0,
   }));
 
   res.status(200).json({ documents: documentsWithPresence });
@@ -81,6 +90,21 @@ export async function getDocumentHandler(req: Request, res: Response): Promise<v
   const document = await documentService.getDocumentById(userId, id);
   const activeUsers = getWebSocketServer()?.getActiveUsers(id) ?? [];
   res.status(200).json({ document: { ...document, activeUsers } });
+}
+
+/** Cross-server active-user snapshot for a single document, backed by Redis (see
+ *  RedisDocumentTracker) rather than this instance's own in-memory room state. Access is
+ *  enforced by the `requireDocumentAccess('VIEWER')` route middleware. */
+export async function getActiveUsersHandler(req: Request, res: Response): Promise<void> {
+  requireUserId(req);
+  const { id } = req.params;
+
+  const tracker = getDocumentTracker();
+  const [count, users] = tracker
+    ? await Promise.all([tracker.getActiveUserCount(id), tracker.getActiveUsers(id)])
+    : [0, []];
+
+  res.status(200).json({ count, users });
 }
 
 export async function updateDocumentTitleHandler(req: Request, res: Response): Promise<void> {
