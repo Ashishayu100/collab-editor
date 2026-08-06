@@ -7,6 +7,7 @@ import {
   renameFolderHandler,
 } from '../controllers/folder.controller';
 import { requireAuth } from '../middleware/auth';
+import { validateFolderQuota } from '../middleware/quotaLimits';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 
@@ -38,7 +39,7 @@ const renameFolderSchema = z.object({
 router.use(requireAuth);
 
 router.get('/', asyncHandler(listFoldersHandler));
-router.post('/', validate(createFolderSchema), asyncHandler(createFolderHandler));
+router.post('/', validate(createFolderSchema), validateFolderQuota, asyncHandler(createFolderHandler));
 router.patch('/:id', validate(renameFolderSchema), asyncHandler(renameFolderHandler));
 router.delete('/:id', validate(idParamSchema), asyncHandler(deleteFolderHandler));
 

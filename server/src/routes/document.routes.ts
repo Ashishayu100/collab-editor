@@ -12,7 +12,10 @@ import {
   toggleStarHandler,
   updateDocumentTitleHandler,
 } from '../controllers/document.controller';
+import { DOCUMENT_LIMITS } from '../config/limits';
 import { requireAuth } from '../middleware/auth';
+import { validateDocumentQuota } from '../middleware/quotaLimits';
+import { documentCreateLimiter } from '../middleware/rateLimiter';
 import { requireDocumentAccess } from '../middleware/requireDocumentAccess';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -60,7 +63,7 @@ const moveDocumentSchema = z.object({
 
 const createDocumentSchema = z.object({
   body: z.object({
-    title: z.string().min(1).max(255).optional(),
+    title: z.string().min(1).max(DOCUMENT_LIMITS.MAX_TITLE_LENGTH).optional(),
   }),
   query: z.object({}).optional(),
   params: z.object({}).optional(),
@@ -68,7 +71,10 @@ const createDocumentSchema = z.object({
 
 const updateTitleSchema = z.object({
   body: z.object({
-    title: z.string().min(1, 'Title must be at least 1 character').max(255, 'Title must be at most 255 characters'),
+    title: z
+      .string()
+      .min(1, 'Title must be at least 1 character')
+      .max(DOCUMENT_LIMITS.MAX_TITLE_LENGTH, `Title must be at most ${DOCUMENT_LIMITS.MAX_TITLE_LENGTH} characters`),
   }),
   query: z.object({}).optional(),
   params: z.object({ id: z.string().min(1) }),
@@ -85,7 +91,13 @@ const saveContentSchema = z.object({
 router.use(requireAuth);
 
 router.get('/', validate(listQuerySchema), asyncHandler(listDocumentsHandler));
-router.post('/', validate(createDocumentSchema), asyncHandler(createDocumentHandler));
+router.post(
+  '/',
+  documentCreateLimiter,
+  validate(createDocumentSchema),
+  validateDocumentQuota,
+  asyncHandler(createDocumentHandler)
+);
 // Must be registered before /:id — otherwise Express would match "search" as the :id param.
 router.get('/search', validate(searchQuerySchema), asyncHandler(searchDocumentsHandler));
 router.get('/:id', validate(idParamSchema), requireDocumentAccess('VIEWER'), asyncHandler(getDocumentHandler));

@@ -1,5 +1,6 @@
 import { Prisma, Role } from '@prisma/client';
 import { prisma } from '../config/database';
+import { DOCUMENT_LIMITS } from '../config/limits';
 import { ApiError } from '../utils/ApiError';
 import {
   createEmptyYDocState,
@@ -312,9 +313,20 @@ export async function saveDocumentContent(userId: string, documentId: string, co
     select: { content: true },
   });
 
+  const merged = mergeYjsState(existing?.content ?? null, incoming);
+
+  // Same "log loudly, never reject" reasoning as the WebSocket auto-save path (see
+  // WebSocketServer.ts's saveDocument): this is a CRDT merge the client already applied locally,
+  // so refusing to persist it here would desync the server from the client with no recovery path.
+  if (merged.byteLength > DOCUMENT_LIMITS.MAX_DOCUMENT_SIZE) {
+    console.error(
+      `[REST] Document ${documentId} content is ${merged.byteLength} bytes — exceeds the ${DOCUMENT_LIMITS.MAX_DOCUMENT_SIZE}-byte soft cap. Saving anyway to avoid diverging from connected clients.`
+    );
+  }
+
   const document = await prisma.document.update({
     where: { id: documentId },
-    data: { content: mergeYjsState(existing?.content ?? null, incoming) },
+    data: { content: merged },
     select: { updatedAt: true },
   });
 

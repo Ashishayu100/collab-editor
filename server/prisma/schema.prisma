@@ -50,6 +50,8 @@ model Document {
   starredBy     StarredDocument[]
 
   @@index([folderId])
+  @@index([ownerId, updatedAt]) // Dashboard "owned" list, sorted by most recently edited
+  @@index([title]) // Title search (listDocuments' `search` filter, and GET /documents/search)
   @@map("documents")
 }
 
@@ -63,6 +65,9 @@ model Collaborator {
   document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // @@unique([documentId, userId]) below already indexes documentId-prefixed lookups; this one is
+  // for the reverse direction — "shared with me" (documentService.listDocuments' `filter: 'shared'`).
+  @@index([userId])
   @@unique([documentId, userId])
   @@map("collaborators")
 }
@@ -113,7 +118,7 @@ model Comment {
   document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([documentId])
+  @@index([documentId, createdAt]) // Thread list ordered by time (supersedes the plain documentId index)
   @@index([parentId])
   @@map("comments")
 }

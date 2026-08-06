@@ -19,6 +19,7 @@ import { WebSocket, WebSocketServer as WSServer } from 'ws';
 import * as Y from 'yjs';
 import { Role } from '@prisma/client';
 import { prisma } from '../config/database';
+import { DOCUMENT_LIMITS, REDIS_PUBLISH_LIMITS, WS_LIMITS } from '../config/limits';
 import { checkDocumentAccess } from '../services/document.service';
 import { RedisDocumentTracker } from '../services/RedisDocumentTracker';
 import { RedisMessage, RedisPubSub } from '../services/RedisPubSub';
@@ -55,7 +56,6 @@ const SAVE_DEBOUNCE_MS = 5000;
 const PERIODIC_SAVE_INTERVAL_MS = 30000;
 const EMPTY_ROOM_CLEANUP_MS = 60000;
 const MAX_CONSECUTIVE_SAVE_FAILURES = 5;
-const DOCUMENT_SIZE_WARNING_BYTES = 5 * 1024 * 1024; // 5MB
 
 interface ClientConnection {
   ws: WebSocket;
@@ -67,6 +67,16 @@ interface ClientConnection {
   role: Role;
   /** Awareness clientIds this connection introduced — used to clean up on disconnect. */
   ownedClientIds: Set<number>;
+  /** Remote address at connect time — used for the per-IP connection tracker on disconnect. */
+  ip: string;
+  /** Updated on every inbound message (including ping) — drives idle-connection cleanup. */
+  lastActivity: number;
+  /** Per-second sliding window for the message-rate guard, reset once `messageWindowStart` ages out. */
+  messageCount: number;
+  messageWindowStart: number;
+  /** Set once this client has been warned about exceeding the soft rate limit, so the warning
+   *  log doesn't repeat on every single dropped message for the rest of that window. */
+  rateWarned: boolean;
 }
 
 interface DocumentRoom {
@@ -103,8 +113,22 @@ export class CollabWebSocketServer {
   private wss: WSServer;
   private rooms: Map<string, DocumentRoom> = new Map();
   private periodicSaveInterval: ReturnType<typeof setInterval>;
+  private idleSweepInterval: ReturnType<typeof setInterval>;
   private redisPubSub: RedisPubSub;
   private documentTracker: RedisDocumentTracker;
+
+  /** Concurrent open connections per IP — incremented on connect, decremented on disconnect. */
+  private connectionsByIp: Map<string, number> = new Map();
+  /** Recent connection-attempt timestamps per IP, pruned to the rolling rate window on each check. */
+  private connectionTimestampsByIp: Map<string, number[]> = new Map();
+
+  /** Per-document buffer of Yjs updates awaiting a merged Redis publish (see batchYjsUpdateForRedis). */
+  private yjsRedisBatches: Map<string, { updates: Uint8Array[]; timer: ReturnType<typeof setTimeout> }> = new Map();
+  /** Per-document awareness throttle state for the Redis fan-out (see throttledAwarenessPublish). */
+  private awarenessRedisThrottle: Map<
+    string,
+    { lastPublish: number; timer: ReturnType<typeof setTimeout> | null; pendingClientIds: Set<number> }
+  > = new Map();
 
   constructor(httpServer: HTTPServer, redisPubSub: RedisPubSub, documentTracker: RedisDocumentTracker) {
     this.wss = new WSServer({ noServer: true });
@@ -126,6 +150,187 @@ export class CollabWebSocketServer {
         void this.documentTracker.refreshTTL(room.docId);
       });
     }, PERIODIC_SAVE_INTERVAL_MS);
+
+    this.idleSweepInterval = setInterval(() => {
+      this.cleanupIdleConnections();
+    }, WS_LIMITS.IDLE_SWEEP_INTERVAL_MS);
+  }
+
+  /** Concurrent + rate limit check for a new WebSocket connection from a given IP, applied at
+   *  upgrade time — before the socket is ever accepted. */
+  private checkConnectionAllowed(ip: string): { allowed: boolean; reason?: string } {
+    const concurrent = this.connectionsByIp.get(ip) ?? 0;
+    if (concurrent >= WS_LIMITS.MAX_CONNECTIONS_PER_IP) {
+      return { allowed: false, reason: `Too many concurrent connections from ${ip}` };
+    }
+
+    const now = Date.now();
+    const recentAttempts = (this.connectionTimestampsByIp.get(ip) ?? []).filter(
+      (t) => now - t < WS_LIMITS.CONNECTION_RATE_WINDOW_MS
+    );
+    if (recentAttempts.length >= WS_LIMITS.CONNECTION_RATE_LIMIT) {
+      this.connectionTimestampsByIp.set(ip, recentAttempts);
+      return { allowed: false, reason: `Too many new connections from ${ip}` };
+    }
+
+    recentAttempts.push(now);
+    this.connectionTimestampsByIp.set(ip, recentAttempts);
+    return { allowed: true };
+  }
+
+  private registerConnection(ip: string): void {
+    this.connectionsByIp.set(ip, (this.connectionsByIp.get(ip) ?? 0) + 1);
+  }
+
+  private releaseConnection(ip: string): void {
+    const count = this.connectionsByIp.get(ip);
+    if (count === undefined) return;
+    if (count <= 1) {
+      this.connectionsByIp.delete(ip);
+    } else {
+      this.connectionsByIp.set(ip, count - 1);
+    }
+  }
+
+  /** Per-client message-rate guard: soft-drops messages past MAX_MESSAGES_PER_SECOND, and
+   *  disconnects a connection that keeps sending past the hard ceiling. Returns whether the
+   *  message currently being processed should proceed. */
+  private checkMessageRate(client: ClientConnection): boolean {
+    const now = Date.now();
+    if (now - client.messageWindowStart > 1000) {
+      client.messageCount = 0;
+      client.messageWindowStart = now;
+      client.rateWarned = false;
+    }
+
+    client.messageCount++;
+
+    if (client.messageCount > WS_LIMITS.MAX_MESSAGES_PER_SECOND_HARD) {
+      console.warn(
+        `[WS] userId=${client.userId} exceeded the hard message rate on doc ${client.documentId} — disconnecting`
+      );
+      client.ws.close(1008, 'Message rate exceeded');
+      return false;
+    }
+
+    if (client.messageCount > WS_LIMITS.MAX_MESSAGES_PER_SECOND) {
+      if (!client.rateWarned) {
+        client.rateWarned = true;
+        console.warn(`[WS] userId=${client.userId} exceeding message rate on doc ${client.documentId} — dropping excess messages`);
+      }
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Buffers a local Yjs update for a document rather than publishing it to Redis immediately,
+   * flushing a single merged update after YJS_BATCH_WINDOW_MS. Fast typing produces a flurry of
+   * tiny updates in quick succession — merging them into one Redis message before the
+   * cross-server fan-out cuts pub/sub traffic sharply without adding any latency for clients on
+   * *this* server, which already got each update the instant it happened (see the local broadcast
+   * above, which runs before this is ever called).
+   */
+  private batchYjsUpdateForRedis(documentId: string, update: Uint8Array): void {
+    const existing = this.yjsRedisBatches.get(documentId);
+    if (existing) {
+      existing.updates.push(update);
+      return;
+    }
+
+    const timer = setTimeout(() => this.flushYjsRedisBatch(documentId), REDIS_PUBLISH_LIMITS.YJS_BATCH_WINDOW_MS);
+    this.yjsRedisBatches.set(documentId, { updates: [update], timer });
+  }
+
+  private flushYjsRedisBatch(documentId: string): void {
+    const batch = this.yjsRedisBatches.get(documentId);
+    if (!batch) return;
+    this.yjsRedisBatches.delete(documentId);
+
+    const merged = batch.updates.length === 1 ? batch.updates[0] : Y.mergeUpdates(batch.updates);
+    this.redisPubSub.publishYjsSync(documentId, merged).catch((err) => {
+      console.error(`[WS] Redis sync publish failed for doc ${documentId}:`, err);
+    });
+  }
+
+  /**
+   * Throttles a document's awareness fan-out to Redis to roughly AWARENESS_THROTTLE_MS between
+   * publishes (~10/sec), coalescing whichever clientIds changed in between into one re-encoded
+   * update read fresh from the room's *current* awareness state at flush time — never replaying
+   * stale bytes captured back when the throttle window started. A trailing flush is always
+   * scheduled so the final position in a burst is never dropped, just delayed to the window
+   * boundary — unlike a naive leading-edge throttle, remote cursors never get stuck mid-burst.
+   */
+  private throttledAwarenessPublish(room: DocumentRoom, changedClients: number[]): void {
+    let state = this.awarenessRedisThrottle.get(room.docId);
+    if (!state) {
+      state = { lastPublish: 0, timer: null, pendingClientIds: new Set() };
+      this.awarenessRedisThrottle.set(room.docId, state);
+    }
+    changedClients.forEach((id) => state!.pendingClientIds.add(id));
+
+    if (state.timer) return; // A flush is already scheduled — it'll pick up these clientIds too.
+
+    const elapsed = Date.now() - state.lastPublish;
+    const delay = Math.max(0, REDIS_PUBLISH_LIMITS.AWARENESS_THROTTLE_MS - elapsed);
+    state.timer = setTimeout(() => this.flushAwarenessRedisThrottle(room), delay);
+  }
+
+  private flushAwarenessRedisThrottle(room: DocumentRoom): void {
+    const state = this.awarenessRedisThrottle.get(room.docId);
+    if (!state) return;
+
+    state.timer = null;
+    state.lastPublish = Date.now();
+    if (state.pendingClientIds.size === 0) return;
+
+    const ids = Array.from(state.pendingClientIds);
+    state.pendingClientIds.clear();
+    const update = encodeAwarenessUpdate(room.awareness, ids);
+    this.redisPubSub.publishAwareness(room.docId, update).catch((err) => {
+      console.error(`[WS] Redis awareness publish failed for doc ${room.docId}:`, err);
+    });
+  }
+
+  /** Flushes any buffered Redis fan-out for a document immediately — called when its room is
+   *  destroyed so a pending batch/throttle timer doesn't fire against (or outlive) a dead room. */
+  private flushRedisPublishState(documentId: string): void {
+    const batch = this.yjsRedisBatches.get(documentId);
+    if (batch) {
+      clearTimeout(batch.timer);
+      this.yjsRedisBatches.delete(documentId);
+      const merged = batch.updates.length === 1 ? batch.updates[0] : Y.mergeUpdates(batch.updates);
+      this.redisPubSub.publishYjsSync(documentId, merged).catch((err) => {
+        console.error(`[WS] Redis sync publish failed for doc ${documentId}:`, err);
+      });
+    }
+
+    const throttle = this.awarenessRedisThrottle.get(documentId);
+    if (throttle) {
+      if (throttle.timer) clearTimeout(throttle.timer);
+      this.awarenessRedisThrottle.delete(documentId);
+      // No room object at this point (the caller already tore it down) to re-encode from, and a
+      // room being destroyed means everyone in it already disconnected — their removal already
+      // flows to other instances via each connection's own awareness-state cleanup, so any
+      // still-pending clientIds here are redundant, not lost.
+    }
+  }
+
+  /** Closes any connection that hasn't sent a message (including ping keepalives) in
+   *  WS_LIMITS.IDLE_TIMEOUT_MS — abandoned tabs/dropped networks that never ran a clean close. */
+  private cleanupIdleConnections(): void {
+    const now = Date.now();
+    this.rooms.forEach((room) => {
+      room.clients.forEach((client, ws) => {
+        if (now - client.lastActivity > WS_LIMITS.IDLE_TIMEOUT_MS) {
+          console.log(
+            `[WS] Disconnecting idle client userId=${client.userId} from doc ${room.docId} (idle ${Math.round((now - client.lastActivity) / 1000)}s)`
+          );
+          ws.close(1000, 'Idle timeout');
+        }
+      });
+    });
   }
 
   private async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
@@ -160,8 +365,17 @@ export class CollabWebSocketServer {
         return;
       }
 
+      const ip = request.socket.remoteAddress ?? 'unknown';
+      const { allowed, reason } = this.checkConnectionAllowed(ip);
+      if (!allowed) {
+        console.warn(`[WS] Rejecting connection from ${ip}: ${reason}`);
+        socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
       this.wss.handleUpgrade(request, socket, head, (ws) => {
-        this.handleConnection(ws, documentId, payload.userId, user.name, user.avatarColor, role);
+        this.handleConnection(ws, documentId, payload.userId, user.name, user.avatarColor, role, ip);
       });
     } catch (error) {
       console.error('[WS] Auth failed during upgrade:', error);
@@ -233,11 +447,10 @@ export class CollabWebSocketServer {
       this.scheduleSave(room);
 
       // Updates replayed from Redis (origin === REDIS_ORIGIN) must not be published back —
-      // that would echo the change between server instances forever.
+      // that would echo the change between server instances forever. Local clients above already
+      // got this update immediately; only the cross-server fan-out is batched.
       if (origin !== REDIS_ORIGIN) {
-        this.redisPubSub.publishYjsSync(room.docId, update).catch((err) => {
-          console.error(`[WS] Redis sync publish failed for doc ${room.docId}:`, err);
-        });
+        this.batchYjsUpdateForRedis(room.docId, update);
       }
     });
 
@@ -270,10 +483,10 @@ export class CollabWebSocketServer {
           }
         });
 
+        // Local clients above already have this instantly; only the cross-server fan-out (via
+        // Redis) is throttled — cursor-position spam would otherwise dominate Redis traffic.
         if (origin !== REDIS_ORIGIN) {
-          this.redisPubSub.publishAwareness(room.docId, awarenessUpdate).catch((err) => {
-            console.error(`[WS] Redis awareness publish failed for doc ${room.docId}:`, err);
-          });
+          this.throttledAwarenessPublish(room, changedClients);
         }
       }
     );
@@ -318,9 +531,10 @@ export class CollabWebSocketServer {
     userId: string,
     userName: string,
     userColor: string,
-    role: Role
+    role: Role,
+    ip: string
   ): void {
-    void this.setupClient(ws, documentId, userId, userName, userColor, role);
+    void this.setupClient(ws, documentId, userId, userName, userColor, role, ip);
   }
 
   private async setupClient(
@@ -329,14 +543,30 @@ export class CollabWebSocketServer {
     userId: string,
     userName: string,
     userColor: string,
-    role: Role
+    role: Role,
+    ip: string
   ): Promise<void> {
     const room = await this.getOrCreateRoom(documentId);
 
     if (ws.readyState !== WebSocket.OPEN) return;
 
-    const client: ClientConnection = { ws, userId, userName, userColor, documentId, role, ownedClientIds: new Set() };
+    const now = Date.now();
+    const client: ClientConnection = {
+      ws,
+      userId,
+      userName,
+      userColor,
+      documentId,
+      role,
+      ownedClientIds: new Set(),
+      ip,
+      lastActivity: now,
+      messageCount: 0,
+      messageWindowStart: now,
+      rateWarned: false,
+    };
     room.clients.set(ws, client);
+    this.registerConnection(ip);
 
     void this.documentTracker.addActiveUser(documentId, userId, userName);
 
@@ -357,8 +587,22 @@ export class CollabWebSocketServer {
     }
 
     ws.on('message', (data: ArrayBuffer) => {
+      const bytes = new Uint8Array(data);
+
+      if (bytes.byteLength > WS_LIMITS.MAX_MESSAGE_SIZE) {
+        console.warn(`[WS] userId=${userId} sent an oversized message (${bytes.byteLength} bytes) — closing connection`);
+        ws.close(1009, 'Message too large');
+        return;
+      }
+
+      client.lastActivity = Date.now();
+
+      if (!this.checkMessageRate(client)) {
+        return; // Soft-dropped (or the hard limit already closed the socket) — never reaches handleMessage.
+      }
+
       try {
-        this.handleMessage(room, client, new Uint8Array(data));
+        this.handleMessage(room, client, bytes);
       } catch (error) {
         console.error(`[WS] Error handling message from userId=${userId}:`, error);
         ws.close();
@@ -366,6 +610,7 @@ export class CollabWebSocketServer {
     });
 
     ws.on('close', () => {
+      this.releaseConnection(ip);
       void this.handleDisconnect(room, ws, userId);
     });
 
@@ -467,6 +712,7 @@ export class CollabWebSocketServer {
     }
     room.ydoc.destroy();
 
+    this.flushRedisPublishState(room.docId);
     await this.redisPubSub.unsubscribe(room.docId);
     await this.documentTracker.removeAllServerUsers(room.docId);
 
@@ -690,8 +936,15 @@ export class CollabWebSocketServer {
     try {
       const state = Buffer.from(Y.encodeStateAsUpdate(room.ydoc));
 
-      if (state.byteLength > DOCUMENT_SIZE_WARNING_BYTES) {
-        console.warn(`[WS] Document ${room.docId} content is ${state.byteLength} bytes — exceeds the 5MB warning threshold`);
+      // Loud, not blocking: Yjs updates are CRDT merges the client already applied locally and
+      // believes succeeded — silently refusing to persist one here wouldn't undo the client's
+      // edit, it would just desync the server from every client with no way for either side to
+      // detect or recover from the divergence. The cap exists so an operator finds out (and can
+      // reach out to the user, or extend it) long before storage/backup cost becomes the problem.
+      if (state.byteLength > DOCUMENT_LIMITS.MAX_DOCUMENT_SIZE) {
+        console.error(
+          `[WS] Document ${room.docId} content is ${state.byteLength} bytes — exceeds the ${DOCUMENT_LIMITS.MAX_DOCUMENT_SIZE}-byte soft cap. Saving anyway to avoid diverging from connected clients.`
+        );
       }
 
       const editorId = room.lastEditorUserId;
@@ -740,6 +993,7 @@ export class CollabWebSocketServer {
   public async shutdown(): Promise<void> {
     console.log(`[WS] Shutting down — saving ${this.rooms.size} room(s)...`);
     clearInterval(this.periodicSaveInterval);
+    clearInterval(this.idleSweepInterval);
 
     const savePromises: Promise<void>[] = [];
     this.rooms.forEach((room) => {
@@ -754,6 +1008,7 @@ export class CollabWebSocketServer {
       if (room.hasUnsavedChanges) {
         savePromises.push(this.saveDocument(room));
       }
+      this.flushRedisPublishState(room.docId);
     });
 
     await Promise.allSettled(savePromises);
@@ -762,6 +1017,7 @@ export class CollabWebSocketServer {
 
   public close(): void {
     clearInterval(this.periodicSaveInterval);
+    clearInterval(this.idleSweepInterval);
     this.rooms.forEach((room) => {
       if (room.saveTimeout) clearTimeout(room.saveTimeout);
       if (room.emptyRoomTimeout) clearTimeout(room.emptyRoomTimeout);

@@ -33,7 +33,15 @@
       "Bash(curl -s http://localhost:3001/api/health -m 3)",
       "Bash(echo \"exit:$?\")",
       "Bash(curl -s -m 5 http://localhost:3001/api/health)",
-      "Bash(rm -f redis-scaling-test.tmp.js)"
+      "Bash(rm -f redis-scaling-test.tmp.js)",
+      "Bash(npx prisma *)",
+      "Bash(cp 'C:\\\\Users\\\\Ashish\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Ashish-OneDrive-Desktop-real-time-collaborative-document-editor\\\\dfa875d2-aa47-4624-9376-1d78fb778e8d\\\\scratchpad/day14-test.js' c:/Users/Ashish/OneDrive/Desktop/real-time-collaborative-document-editor/server/day14-test.tmp.js)",
+      "Bash(node day14-test.tmp.js)",
+      "Bash(rm -f day14-test.tmp.js)",
+      "Bash(cp 'C:\\\\Users\\\\Ashish\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Ashish-OneDrive-Desktop-real-time-collaborative-document-editor\\\\dfa875d2-aa47-4624-9376-1d78fb778e8d\\\\scratchpad/day14-ws-test.js' c:/Users/Ashish/OneDrive/Desktop/real-time-collaborative-document-editor/server/day14-ws-test.tmp.js)",
+      "Bash(node day14-ws-test.tmp.js)",
+      "Bash(rm -f day14-ws-test.tmp.js)",
+      "Bash(node day14-browser-test.js)"
     ]
   }
 }

@@ -8,6 +8,7 @@ import {
   signupHandler,
 } from '../controllers/auth.controller';
 import { requireAuth } from '../middleware/auth';
+import { authLimiter } from '../middleware/rateLimiter';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
 
@@ -47,9 +48,9 @@ const refreshSchema = z.object({
   params: z.object({}).optional(),
 });
 
-router.post('/signup', validate(signupSchema), asyncHandler(signupHandler));
-router.post('/login', validate(loginSchema), asyncHandler(loginHandler));
-router.post('/refresh', validate(refreshSchema), asyncHandler(refreshHandler));
+router.post('/signup', authLimiter, validate(signupSchema), asyncHandler(signupHandler));
+router.post('/login', authLimiter, validate(loginSchema), asyncHandler(loginHandler));
+router.post('/refresh', authLimiter, validate(refreshSchema), asyncHandler(refreshHandler));
 router.get('/me', requireAuth, asyncHandler(meHandler));
 router.post('/logout', asyncHandler(logoutHandler));
 

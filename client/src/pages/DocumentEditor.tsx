@@ -1,21 +1,34 @@
 import { formatDistanceToNow } from 'date-fns';
 import { ArrowLeft, Check, History, Keyboard, Loader2, MessageSquare, Share2, Users, X } from 'lucide-react';
-import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { KeyboardEvent, lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Awareness } from 'y-protocols/awareness';
 import { versionApi } from '../api/versions';
-import { CommentsPanel } from '../components/comments/CommentsPanel';
 import { Editor, EditorHandle } from '../components/editor/Editor';
-import { KeyboardShortcutsDialog } from '../components/editor/KeyboardShortcutsDialog';
-import { ParticipantsPanel } from '../components/editor/ParticipantsPanel';
 import { PresencePanel } from '../components/editor/PresencePanel';
-import { ShareDialog } from '../components/editor/ShareDialog';
-import { VersionHistoryPanel } from '../components/editor/VersionHistoryPanel';
 import { useAwareness } from '../hooks/useAwareness';
+import { useLazyMount } from '../hooks/useLazyMount';
 import { ConnectionStatus } from '../lib/WebSocketProvider';
 import { useAuthStore } from '../stores/authStore';
 import { useCommentStore } from '../stores/commentStore';
 import { SaveStatus, useDocumentStore } from '../stores/documentStore';
+
+// Code-split the panels/dialogs that aren't needed for the initial editor render — each only
+// fetches its chunk the first time the user actually opens it (see useLazyMount below), never on
+// first paint. Declared at module scope so `lazy()`'s identity is stable across re-renders.
+const CommentsPanel = lazy(() =>
+  import('../components/comments/CommentsPanel').then((m) => ({ default: m.CommentsPanel }))
+);
+const VersionHistoryPanel = lazy(() =>
+  import('../components/editor/VersionHistoryPanel').then((m) => ({ default: m.VersionHistoryPanel }))
+);
+const ParticipantsPanel = lazy(() =>
+  import('../components/editor/ParticipantsPanel').then((m) => ({ default: m.ParticipantsPanel }))
+);
+const ShareDialog = lazy(() => import('../components/editor/ShareDialog').then((m) => ({ default: m.ShareDialog })));
+const KeyboardShortcutsDialog = lazy(() =>
+  import('../components/editor/KeyboardShortcutsDialog').then((m) => ({ default: m.KeyboardShortcutsDialog }))
+);
 
 /** Isolated so its periodic re-render (to keep "Xs ago" fresh) doesn't touch the rest of the header. */
 function SavedTimeAgo({ lastSavedAt }: { lastSavedAt: Date }) {
@@ -194,6 +207,12 @@ export default function DocumentEditor() {
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [followingClientId, setFollowingClientId] = useState<number | null>(null);
+
+  const commentsEverOpened = useLazyMount(isCommentsOpen);
+  const versionHistoryEverOpened = useLazyMount(isVersionHistoryOpen);
+  const participantsEverOpened = useLazyMount(isParticipantsOpen);
+  const shareDialogEverOpened = useLazyMount(isShareDialogOpen);
+  const shortcutsEverOpened = useLazyMount(isShortcutsOpen);
 
   const currentUserId = useAuthStore((state) => state.user?.id);
   const commentCount = useCommentStore((state) => state.comments.filter((c) => !c.resolved).length);
@@ -474,52 +493,70 @@ export default function DocumentEditor() {
           />
         </div>
 
-        {currentUserId && (
-          <CommentsPanel
-            documentId={currentDocument.id}
-            isOpen={isCommentsOpen}
-            onClose={() => setIsCommentsOpen(false)}
-            canComment={currentDocument.role !== 'VIEWER'}
-            isOwner={currentDocument.role === 'OWNER'}
-            currentUserId={currentUserId}
-            pendingAnchor={pendingCommentAnchor}
-            onAnchorConsumed={() => setPendingCommentAnchor(undefined)}
-          />
+        {currentUserId && commentsEverOpened && (
+          <Suspense fallback={null}>
+            <CommentsPanel
+              documentId={currentDocument.id}
+              isOpen={isCommentsOpen}
+              onClose={() => setIsCommentsOpen(false)}
+              canComment={currentDocument.role !== 'VIEWER'}
+              isOwner={currentDocument.role === 'OWNER'}
+              currentUserId={currentUserId}
+              pendingAnchor={pendingCommentAnchor}
+              onAnchorConsumed={() => setPendingCommentAnchor(undefined)}
+            />
+          </Suspense>
         )}
 
-        <VersionHistoryPanel
-          documentId={currentDocument.id}
-          documentTitle={currentDocument.title}
-          isOpen={isVersionHistoryOpen}
-          onClose={() => {
-            setIsVersionHistoryOpen(false);
-            void refreshVersionSummary(currentDocument.id);
-          }}
-          canRestore={currentDocument.role !== 'VIEWER'}
-          onRestored={() => void fetchDocument(currentDocument.id)}
-        />
+        {versionHistoryEverOpened && (
+          <Suspense fallback={null}>
+            <VersionHistoryPanel
+              documentId={currentDocument.id}
+              documentTitle={currentDocument.title}
+              isOpen={isVersionHistoryOpen}
+              onClose={() => {
+                setIsVersionHistoryOpen(false);
+                void refreshVersionSummary(currentDocument.id);
+              }}
+              canRestore={currentDocument.role !== 'VIEWER'}
+              onRestored={() => void fetchDocument(currentDocument.id)}
+            />
+          </Suspense>
+        )}
 
-        <ParticipantsPanel
-          awareness={awareness}
-          isOpen={isParticipantsOpen}
-          onClose={() => setIsParticipantsOpen(false)}
-          currentUserRole={currentDocument.role}
-          followingClientId={followingClientId}
-          onFollow={setFollowingClientId}
-          onStopFollow={() => setFollowingClientId(null)}
-        />
+        {participantsEverOpened && (
+          <Suspense fallback={null}>
+            <ParticipantsPanel
+              awareness={awareness}
+              isOpen={isParticipantsOpen}
+              onClose={() => setIsParticipantsOpen(false)}
+              currentUserRole={currentDocument.role}
+              followingClientId={followingClientId}
+              onFollow={setFollowingClientId}
+              onStopFollow={() => setFollowingClientId(null)}
+            />
+          </Suspense>
+        )}
       </div>
 
-      <ShareDialog
-        isOpen={isShareDialogOpen}
-        onClose={() => setIsShareDialogOpen(false)}
-        documentId={currentDocument.id}
-        documentTitle={currentDocument.title}
-        currentUserRole={currentDocument.role}
-        onLeft={() => navigate('/dashboard')}
-      />
+      {shareDialogEverOpened && (
+        <Suspense fallback={null}>
+          <ShareDialog
+            isOpen={isShareDialogOpen}
+            onClose={() => setIsShareDialogOpen(false)}
+            documentId={currentDocument.id}
+            documentTitle={currentDocument.title}
+            currentUserRole={currentDocument.role}
+            onLeft={() => navigate('/dashboard')}
+          />
+        </Suspense>
+      )}
 
-      <KeyboardShortcutsDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      {shortcutsEverOpened && (
+        <Suspense fallback={null}>
+          <KeyboardShortcutsDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

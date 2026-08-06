@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { exportHtmlHandler, exportMarkdownHandler, exportPdfHandler } from '../controllers/export.controller';
 import { requireAuth } from '../middleware/auth';
+import { exportLimiter } from '../middleware/rateLimiter';
 import { requireDocumentAccess } from '../middleware/requireDocumentAccess';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -17,6 +18,7 @@ const exportSchema = z.object({
 });
 
 router.use(requireAuth);
+router.use(exportLimiter);
 
 router.post('/pdf', validate(exportSchema), requireDocumentAccess('VIEWER'), asyncHandler(exportPdfHandler));
 router.post('/markdown', validate(exportSchema), requireDocumentAccess('VIEWER'), asyncHandler(exportMarkdownHandler));

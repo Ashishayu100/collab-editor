@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as sharingService from '../services/sharing.service';
 import { ApiError } from '../utils/ApiError';
 import { requireAuth } from '../middleware/auth';
+import { validateCollaboratorQuota } from '../middleware/quotaLimits';
 import { requireDocumentAccess } from '../middleware/requireDocumentAccess';
 import { validate } from '../middleware/validate';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -74,6 +75,7 @@ documentSharingRoutes.post(
   '/:id/collaborators',
   validate(addCollaboratorSchema),
   requireDocumentAccess('OWNER'),
+  validateCollaboratorQuota,
   asyncHandler(async (req: Request, res: Response) => {
     const { email, role } = req.body as { email: string; role: 'VIEWER' | 'EDITOR' };
     const collaborator = await sharingService.addCollaborator(requireUserId(req), req.params.id, email, role);

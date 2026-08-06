@@ -61,3 +61,22 @@ export function createRedisClient(): Redis {
   client.on('error', (err) => console.error('[Redis] client error:', err.message));
   return client;
 }
+
+/**
+ * Client for the rate-limit counters (see middleware/rateLimiter.ts). Deliberately keeps the
+ * default offline queue (unlike `commandConfig` above): rate-limit-redis loads its Lua scripts
+ * via `store.init()` the instant each limiter is constructed, at module-load time — before this
+ * client's connection handshake has necessarily finished. With `enableOfflineQueue: false` that
+ * first script-load command rejects immediately (the socket isn't open yet), and since
+ * `RedisStore` caches that rejected promise forever, every rate-limit check for the rest of the
+ * process's life would then hit the same cached failure — silently disabling rate limiting
+ * entirely, even long after Redis is fully connected. Queueing that first command instead (the
+ * default) lets it wait the few milliseconds for the handshake and succeed normally.
+ * `maxRetriesPerRequest` stays low so a *genuine* live outage still fails fast, same as elsewhere.
+ */
+export function createRateLimitRedisClient(): Redis {
+  const client = new Redis({ ...baseConfig, maxRetriesPerRequest: 1 });
+  client.on('connect', () => console.log('[Redis] rate-limit client connected'));
+  client.on('error', (err) => console.error('[Redis] rate-limit client error:', err.message));
+  return client;
+}
