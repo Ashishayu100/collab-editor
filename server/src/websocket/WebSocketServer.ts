@@ -122,6 +122,11 @@ export class CollabWebSocketServer {
   /** Recent connection-attempt timestamps per IP, pruned to the rolling rate window on each check. */
   private connectionTimestampsByIp: Map<string, number[]> = new Map();
 
+  /** In-flight room creations, keyed by documentId — de-dupes concurrent first connections to
+   *  the same document (see getOrCreateRoom) so two clients opening a brand-new room at nearly
+   *  the same instant share one room object instead of racing into two separate ones. */
+  private roomCreations: Map<string, Promise<DocumentRoom>> = new Map();
+
   /** Per-document buffer of Yjs updates awaiting a merged Redis publish (see batchYjsUpdateForRedis). */
   private yjsRedisBatches: Map<string, { updates: Uint8Array[]; timer: ReturnType<typeof setTimeout> }> = new Map();
   /** Per-document awareness throttle state for the Redis fan-out (see throttledAwarenessPublish). */
@@ -285,8 +290,13 @@ export class CollabWebSocketServer {
     state.lastPublish = Date.now();
     if (state.pendingClientIds.size === 0) return;
 
-    const ids = Array.from(state.pendingClientIds);
+    // A queued clientId can go stale within the throttle window — e.g. the client disconnected
+    // (removeAwarenessStates deletes its `meta` entry) before this flush fires. encodeAwarenessUpdate
+    // reads `meta.get(id).clock` for every id and throws on a missing entry, so drop those first.
+    const ids = Array.from(state.pendingClientIds).filter((id) => room.awareness.meta.has(id));
     state.pendingClientIds.clear();
+    if (ids.length === 0) return;
+
     const update = encodeAwarenessUpdate(room.awareness, ids);
     this.redisPubSub.publishAwareness(room.docId, update).catch((err) => {
       console.error(`[WS] Redis awareness publish failed for doc ${room.docId}:`, err);
@@ -395,6 +405,25 @@ export class CollabWebSocketServer {
       return existing;
     }
 
+    // Room creation awaits a Prisma query (below), so without this, two clients connecting to
+    // the same brand-new document within that window would both see `existing` as undefined
+    // and each build their own separate room object — the second to finish would silently
+    // overwrite the first's entry in `this.rooms`, orphaning the first client in an
+    // unreachable room it would never share updates with. Concurrent callers instead await the
+    // same in-flight creation.
+    const inFlight = this.roomCreations.get(documentId);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const creation = this.createRoom(documentId).finally(() => {
+      this.roomCreations.delete(documentId);
+    });
+    this.roomCreations.set(documentId, creation);
+    return creation;
+  }
+
+  private async createRoom(documentId: string): Promise<DocumentRoom> {
     const ydoc = new Y.Doc();
 
     const doc = await prisma.document.findUnique({
