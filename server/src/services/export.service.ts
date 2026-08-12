@@ -90,7 +90,15 @@ export async function exportDocumentAsPdf(documentId: string, bodyHtml: string):
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    // Set when running against the system Chromium installed in the Docker image (see
+    // server/Dockerfile) instead of Puppeteer's own bundled download; undefined locally.
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage', // Docker's default /dev/shm is only 64MB — this avoids relying on it.
+      '--disable-gpu',
+    ],
   });
 
   try {

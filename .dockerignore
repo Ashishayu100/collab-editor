@@ -1,0 +1,22 @@
+# The build context for both server/Dockerfile and client/Dockerfile is the repo root (so a
+# single Dockerfile can COPY sibling workspace package.json files) — Docker only ever reads a
+# .dockerignore from the context root, so this one file governs both builds.
+
+**/node_modules
+**/dist
+**/coverage
+**/*.log
+
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+
+**/src/test
+
+# Dev/editor cruft that shouldn't bloat the build context
+.vscode
+.idea
+*.md

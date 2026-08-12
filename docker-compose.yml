@@ -1,23 +1,93 @@
-version: '3.8'
+version: '3.9'
+
+# Production-style full stack: postgres + redis + the built server image + the client served
+# through Nginx. For local development with hot reload, use docker-compose.dev.yml instead
+# (infra only) alongside `npm run dev:server` / `npm run dev:client`.
+
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: collab-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: collab_user
-      POSTGRES_PASSWORD: collab_pass
-      POSTGRES_DB: collab_editor
+      POSTGRES_USER: ${POSTGRES_USER:-collab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-collab_secret_2024}
+      POSTGRES_DB: ${POSTGRES_DB:-collab_editor}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-collab}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - collab-network
 
   redis:
     image: redis:7-alpine
+    container_name: collab-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redisdata:/data
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - collab-network
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: collab-server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-collab}:${POSTGRES_PASSWORD:-collab_secret_2024}@postgres:5432/${POSTGRES_DB:-collab_editor}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-change-me-in-production-access-secret}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-in-production-refresh-secret}
+      CLIENT_URL: ${CLIENT_URL:-http://localhost}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - collab-network
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: collab-client
+    restart: unless-stopped
+    ports:
+      - "${CLIENT_PORT:-80}:80"
+    depends_on:
+      - server
+    networks:
+      - collab-network
 
 volumes:
-  pgdata:
-  redisdata:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  collab-network:
+    driver: bridge

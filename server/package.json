@@ -10,6 +10,7 @@
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "prisma db seed",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -17,6 +18,9 @@
     "test:unit": "vitest run src/test/unit/",
     "test:integration": "vitest run src/test/integration/",
     "test:crdt": "vitest run src/test/unit/crdt.test.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
@@ -35,6 +39,7 @@
     "puppeteer": "^25.5.0",
     "rate-limit-redis": "^6.0.1",
     "turndown": "^7.2.4",
+    "tsx": "^4.19.1",
     "ws": "^8.21.1",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.31",
@@ -53,7 +58,6 @@
     "prisma": "^5.20.0",
     "supertest": "^7.2.2",
     "tsc-alias": "^1.8.10",
-    "tsx": "^4.19.1",
     "typescript": "^5.6.2",
     "vitest": "^4.1.10"
   }

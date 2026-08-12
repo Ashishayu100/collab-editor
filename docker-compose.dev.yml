@@ -1,0 +1,65 @@
+version: '3.9'
+
+# Development infrastructure only — Postgres + Redis (+ an isolated test database). Run the
+# server and client themselves locally with `npm run dev:server` / `npm run dev:client` for
+# hot reload; docker-compose.yml (no .dev suffix) is the full containerized production stack.
+#
+# Credentials here match server/.env.example's DATABASE_URL exactly, so no .env edits are
+# needed to go from a fresh clone to a working `npm run dev`.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: collab-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: collab_user
+      POSTGRES_PASSWORD: collab_pass
+      POSTGRES_DB: collab_editor
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      # Only runs on first init of an empty volume — creates the `collab_test` database that
+      # server/src/test/setup.ts's TEST_DATABASE_URL default points at.
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collab_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: collab-redis-dev
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional isolated test database (tmpfs — fast, and wiped on every `down`). Not used unless
+  # TEST_DATABASE_URL is pointed at it explicitly; by default tests run against the `collab_test`
+  # database on the `postgres` service above.
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: collab-postgres-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: collab_user
+      POSTGRES_PASSWORD: collab_test
+      POSTGRES_DB: collab_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
