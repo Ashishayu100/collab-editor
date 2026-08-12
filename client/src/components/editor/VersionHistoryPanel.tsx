@@ -9,6 +9,8 @@ import { useVersions } from '../../hooks/useVersions';
 import { applyYDocState } from '../../lib/yjs';
 import { getErrorMessage } from '../../lib/utils';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { EmptyState } from '../ui/EmptyState';
+import { SkeletonListItem } from '../ui/Skeleton';
 import { getContentExtensions } from './contentExtensions';
 import './editor.css';
 
@@ -305,16 +307,20 @@ export function VersionHistoryPanel({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {isLoading && versions.length === 0 && (
-            <div className="flex items-center justify-center py-12 text-sm text-gray-400">
-              <Loader2 size={16} className="mr-2 animate-spin" /> Loading versions…
+            <div className="space-y-1">
+              <SkeletonListItem />
+              <SkeletonListItem />
+              <SkeletonListItem />
+              <SkeletonListItem />
             </div>
           )}
 
           {!isLoading && versions.length === 0 && !error && (
-            <div className="flex flex-col items-center gap-2 px-4 py-12 text-center text-sm text-gray-400">
-              <Clock size={24} />
-              No versions yet. Edits are snapshotted automatically, or save one manually above.
-            </div>
+            <EmptyState
+              icon={Clock}
+              title="No versions yet"
+              description="Versions are created automatically as you edit, or save one manually above."
+            />
           )}
 
           {error && <p className="px-2 py-2 text-sm text-red-600">{error}</p>}

@@ -3,6 +3,7 @@ import { KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { FolderNode } from '../../api/folders';
 import { cn, getErrorMessage } from '../../lib/utils';
 import { useFolderStore } from '../../stores/folderStore';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 
 export type DashboardView =
   | { type: 'all' }
@@ -73,6 +74,8 @@ function FolderRow({
   const [isRenaming, setIsRenaming] = useState(false);
   const [isAddingChild, setIsAddingChild] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const isActive = view.type === 'folder' && view.folderId === folder.id;
 
@@ -86,14 +89,17 @@ function FolderRow({
     }
   }
 
-  async function handleDelete() {
-    setMenuOpen(false);
-    if (!window.confirm(`Delete "${folder.name}"? Documents inside will move to the root.`)) return;
+  async function handleConfirmDelete() {
+    setIsDeleting(true);
     try {
       await deleteFolder(folder.id);
+      setIsDeleteConfirmOpen(false);
       if (isActive) onSelectView({ type: 'all' });
     } catch (err) {
       setError(getErrorMessage(err));
+      setIsDeleteConfirmOpen(false);
+    } finally {
+      setIsDeleting(false);
     }
   }
 
@@ -187,7 +193,10 @@ function FolderRow({
               </button>
               <button
                 type="button"
-                onClick={() => void handleDelete()}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setIsDeleteConfirmOpen(true);
+                }}
                 className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
               >
                 <Trash2 size={12} /> Delete
@@ -202,6 +211,17 @@ function FolderRow({
           {error}
         </p>
       )}
+
+      <ConfirmDialog
+        isOpen={isDeleteConfirmOpen}
+        title={`Delete "${folder.name}"?`}
+        description="Documents inside will move to the root. This cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+        isConfirming={isDeleting}
+        onConfirm={() => void handleConfirmDelete()}
+        onCancel={() => setIsDeleteConfirmOpen(false)}
+      />
 
       {expanded && (
         <div>
@@ -245,7 +265,7 @@ export function Sidebar({ view, onSelectView }: SidebarProps) {
   }
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col gap-1 border-r border-gray-200 px-2 py-4">
+    <aside className="flex h-full w-full flex-col gap-1 overflow-y-auto border-r border-gray-200 px-2 py-4">
       {NAV_ITEMS.map(({ view: itemView, label, icon: Icon }) => (
         <button
           key={label}

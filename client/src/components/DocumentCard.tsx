@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { DocumentListItem } from '../api/documents';
 import { cn } from '../lib/utils';
 import { MoveToFolderDialog } from './dashboard/MoveToFolderDialog';
+import { ConfirmDialog } from './ui/ConfirmDialog';
 
 interface DocumentCardProps {
   doc: DocumentListItem;
@@ -41,6 +42,8 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave, onToggleStar, o
   const [titleDraft, setTitleDraft] = useState(doc.title);
   const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
   const [isStarring, setIsStarring] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<'delete' | 'leave' | null>(null);
+  const [isConfirming, setIsConfirming] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -72,18 +75,28 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave, onToggleStar, o
     }
   }
 
-  async function handleDelete() {
+  function handleDelete() {
     setMenuOpen(false);
-    if (window.confirm(`Delete "${doc.title}"? This cannot be undone.`)) {
-      await onDelete(doc.id);
-    }
+    setConfirmAction('delete');
   }
 
-  async function handleLeave() {
+  function handleLeave() {
     setMenuOpen(false);
     if (!doc.myCollaboratorId) return;
-    if (window.confirm(`Leave "${doc.title}"? You'll lose access unless it's shared with you again.`)) {
-      await onLeave(doc.id, doc.myCollaboratorId);
+    setConfirmAction('leave');
+  }
+
+  async function handleConfirmAction() {
+    setIsConfirming(true);
+    try {
+      if (confirmAction === 'delete') {
+        await onDelete(doc.id);
+      } else if (confirmAction === 'leave' && doc.myCollaboratorId) {
+        await onLeave(doc.id, doc.myCollaboratorId);
+      }
+      setConfirmAction(null);
+    } finally {
+      setIsConfirming(false);
     }
   }
 
@@ -260,6 +273,23 @@ export function DocumentCard({ doc, onRename, onDelete, onLeave, onToggleStar, o
           />
         </div>
       )}
+
+      <div onClick={(e) => e.stopPropagation()}>
+        <ConfirmDialog
+          isOpen={confirmAction !== null}
+          title={confirmAction === 'delete' ? `Delete "${doc.title}"?` : `Leave "${doc.title}"?`}
+          description={
+            confirmAction === 'delete'
+              ? 'This cannot be undone.'
+              : "You'll lose access unless it's shared with you again."
+          }
+          confirmLabel={confirmAction === 'delete' ? 'Delete' : 'Leave'}
+          variant="danger"
+          isConfirming={isConfirming}
+          onConfirm={() => void handleConfirmAction()}
+          onCancel={() => setConfirmAction(null)}
+        />
+      </div>
     </div>
   );
 }

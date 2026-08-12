@@ -1,4 +1,4 @@
-import { FileText, Plus, Search, Star, X } from 'lucide-react';
+import { FileSearch, FileText, Folder, Plus, Search, Share2, Star, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { documentApi, DocumentSearchResult } from '../api/documents';
@@ -6,6 +6,8 @@ import { DocumentCard } from '../components/DocumentCard';
 import { DashboardView, Sidebar } from '../components/dashboard/Sidebar';
 import { Layout } from '../components/Layout';
 import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
+import { SkeletonCard } from '../components/ui/Skeleton';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { getErrorMessage } from '../lib/utils';
 import { useDocumentStore } from '../stores/documentStore';
@@ -17,17 +19,6 @@ const VIEW_TITLES: Record<DashboardView['type'], string> = {
   recent: 'Recent',
   folder: '',
 };
-
-function DocumentCardSkeleton() {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-      <div className="mb-6 h-24 animate-pulse rounded-lg bg-gray-100" />
-      <div className="h-4 w-2/3 animate-pulse rounded bg-gray-100" />
-      <div className="mt-2 h-3 w-1/3 animate-pulse rounded bg-gray-100" />
-      <div className="mt-4 h-7 w-7 animate-pulse rounded-full bg-gray-100" />
-    </div>
-  );
-}
 
 function SearchResultRow({ result, onOpen }: { result: DocumentSearchResult; onOpen: () => void }) {
   return (
@@ -57,6 +48,7 @@ export default function Dashboard() {
   const [view, setView] = useState<DashboardView>({ type: 'all' });
   const [search, setSearch] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const debouncedSearch = useDebouncedValue(search, 300);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,14 +110,40 @@ export default function Dashboard() {
   const pageTitle = view.type === 'folder' ? view.folderName : VIEW_TITLES[view.type];
   const showEmptyState = !isSearching && !isLoading && documents.length === 0;
 
+  function handleSelectView(nextView: DashboardView) {
+    setView(nextView);
+    setSidebarOpen(false);
+  }
+
   return (
     <Layout>
       <div className="flex gap-6">
-        <Sidebar view={view} onSelectView={setView} />
+        {/* Mobile overlay backdrop */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-30 bg-black/30 lg:hidden" onClick={() => setSidebarOpen(false)} />
+        )}
+
+        <div
+          className={`fixed inset-y-0 left-0 z-40 w-64 transform bg-white shadow-xl transition-transform duration-200 lg:relative lg:z-auto lg:w-56 lg:shrink-0 lg:translate-x-0 lg:shadow-none ${
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <Sidebar view={view} onSelectView={handleSelectView} />
+        </div>
 
         <div className="min-w-0 flex-1">
           <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <h1 className="text-xl font-semibold text-gray-900">{pageTitle}</h1>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
+                aria-label="Open sidebar"
+              >
+                ☰
+              </button>
+              <h1 className="text-xl font-semibold text-gray-900">{pageTitle}</h1>
+            </div>
             <Button onClick={handleCreate} isLoading={isCreating} className="gap-1.5">
               <Plus size={16} /> New Document
             </Button>
@@ -158,13 +176,17 @@ export default function Dashboard() {
               {searchLoading && (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {Array.from({ length: 4 }).map((_, i) => (
-                    <DocumentCardSkeleton key={i} />
+                    <SkeletonCard key={i} />
                   ))}
                 </div>
               )}
               {searchError && <p className="text-sm text-red-600">{searchError}</p>}
               {!searchLoading && !searchError && searchResults?.length === 0 && (
-                <p className="text-sm text-gray-500">No documents match &quot;{debouncedSearch}&quot;.</p>
+                <EmptyState
+                  icon={FileSearch}
+                  title="No results"
+                  description={`No documents match "${debouncedSearch}". Try a different query.`}
+                />
               )}
               {!searchLoading &&
                 searchResults?.map((result) => (
@@ -176,29 +198,34 @@ export default function Dashboard() {
               {isLoading && documents.length === 0 && (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {Array.from({ length: 6 }).map((_, i) => (
-                    <DocumentCardSkeleton key={i} />
+                    <SkeletonCard key={i} />
                   ))}
                 </div>
               )}
 
               {showEmptyState && (
-                <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-gray-300 bg-white py-20 text-center">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-50">
-                    <FileText className="text-primary" size={28} />
-                  </div>
+                <div className="rounded-xl border border-dashed border-gray-300 bg-white">
                   {view.type === 'starred' ? (
-                    <p className="text-sm text-gray-500">No starred documents yet.</p>
+                    <EmptyState
+                      icon={Star}
+                      title="No starred documents"
+                      description="Star a document to find it quickly here."
+                    />
                   ) : view.type === 'shared' ? (
-                    <p className="text-sm text-gray-500">No documents have been shared with you yet.</p>
+                    <EmptyState
+                      icon={Share2}
+                      title="Nothing shared with you yet"
+                      description="Ask a teammate to invite you to a document."
+                    />
                   ) : view.type === 'folder' ? (
-                    <p className="text-sm text-gray-500">This folder is empty.</p>
+                    <EmptyState icon={Folder} title="This folder is empty" description="Move documents here or create a new one." />
                   ) : (
-                    <>
-                      <p className="text-sm text-gray-500">No documents yet. Create your first document!</p>
-                      <Button onClick={handleCreate} isLoading={isCreating} className="gap-1.5">
-                        <Plus size={16} /> Create your first document
-                      </Button>
-                    </>
+                    <EmptyState
+                      icon={FileText}
+                      title="No documents yet"
+                      description="Create your first document and start collaborating."
+                      action={{ label: 'Create Document', onClick: handleCreate, isLoading: isCreating }}
+                    />
                   )}
                 </div>
               )}

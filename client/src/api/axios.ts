@@ -1,5 +1,7 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../stores/authStore';
+import { useLoadingStore } from '../stores/loadingStore';
+import { useToastStore } from '../stores/toastStore';
 
 interface RetriableRequestConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
@@ -16,6 +18,7 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  useLoadingStore.getState().increment();
   return config;
 });
 
@@ -37,8 +40,17 @@ function flushPendingRequests(token: string | null, error: unknown) {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    useLoadingStore.getState().decrement();
+    return response;
+  },
   async (error: AxiosError) => {
+    useLoadingStore.getState().decrement();
+
+    if (error.response?.status === 429) {
+      useToastStore.getState().addToast('Too many requests. Slow down.', 'warning');
+    }
+
     const originalRequest = error.config as RetriableRequestConfig | undefined;
     const url = originalRequest?.url ?? '';
     const shouldAttemptRefresh =

@@ -4,6 +4,7 @@ import { KeyboardEvent, lazy, Suspense, useCallback, useEffect, useRef, useState
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Awareness } from 'y-protocols/awareness';
 import { versionApi } from '../api/versions';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Editor, EditorHandle } from '../components/editor/Editor';
 import { PresencePanel } from '../components/editor/PresencePanel';
 import { useAwareness } from '../hooks/useAwareness';
@@ -234,6 +235,14 @@ export default function DocumentEditor() {
     setTitleDraft(currentDocument?.title ?? '');
   }, [currentDocument?.id, currentDocument?.title]);
 
+  useEffect(() => {
+    if (!currentDocument) return undefined;
+    document.title = `${currentDocument.title} — CollabEdit`;
+    return () => {
+      document.title = 'CollabEdit';
+    };
+  }, [currentDocument?.title]);
+
   const refreshVersionSummary = useCallback(async (documentId: string) => {
     try {
       const { data } = await versionApi.list(documentId, { limit: 1 });
@@ -361,7 +370,7 @@ export default function DocumentEditor() {
   const otherCollaboratorCount = currentDocument.collaborators.filter((c) => c.id !== currentDocument.owner.id).length;
 
   return (
-    <div className="flex h-screen flex-col bg-white">
+    <div className="fade-in flex h-screen flex-col bg-white">
       <header className="flex items-center justify-between gap-4 border-b border-gray-200 px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <button
@@ -472,25 +481,42 @@ export default function DocumentEditor() {
 
       <div className="flex min-h-0 flex-1">
         <div className="min-h-0 min-w-0 flex-1">
-          <Editor
-            key={currentDocument.id}
-            ref={editorRef}
-            documentId={currentDocument.id}
-            initialContent={currentDocument.content}
-            editable={currentDocument.role !== 'VIEWER'}
-            role={currentDocument.role}
-            onDocumentRestored={() => {
-              void fetchDocument(currentDocument.id);
-              void refreshVersionSummary(currentDocument.id);
-            }}
-            onRoleChanged={() => void fetchDocument(currentDocument.id)}
-            onAccessRevoked={() => navigate('/dashboard')}
-            onStartComment={(anchor) => {
-              setPendingCommentAnchor(anchor);
-              setIsCommentsOpen(true);
-            }}
-            onCommentHighlightClick={() => setIsCommentsOpen(true)}
-          />
+          <ErrorBoundary
+            fallback={
+              <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+                <div className="text-4xl">😵</div>
+                <p className="text-sm font-medium text-gray-900">The editor ran into a problem</p>
+                <p className="max-w-xs text-xs text-gray-500">Your edits up to the last save are safe. Try reloading.</p>
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-primary-dark"
+                >
+                  Reload
+                </button>
+              </div>
+            }
+          >
+            <Editor
+              key={currentDocument.id}
+              ref={editorRef}
+              documentId={currentDocument.id}
+              initialContent={currentDocument.content}
+              editable={currentDocument.role !== 'VIEWER'}
+              role={currentDocument.role}
+              onDocumentRestored={() => {
+                void fetchDocument(currentDocument.id);
+                void refreshVersionSummary(currentDocument.id);
+              }}
+              onRoleChanged={() => void fetchDocument(currentDocument.id)}
+              onAccessRevoked={() => navigate('/dashboard')}
+              onStartComment={(anchor) => {
+                setPendingCommentAnchor(anchor);
+                setIsCommentsOpen(true);
+              }}
+              onCommentHighlightClick={() => setIsCommentsOpen(true)}
+            />
+          </ErrorBoundary>
         </div>
 
         {currentUserId && commentsEverOpened && (

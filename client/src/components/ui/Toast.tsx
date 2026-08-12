@@ -1,19 +1,23 @@
-import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 import { useEffect } from 'react';
 import { cn } from '../../lib/utils';
 import { Toast as ToastData, useToastStore } from '../../stores/toastStore';
 
 const TOAST_DURATION_MS = 4000;
+/** Errors and warnings stay up longer — they're worth reading, not just glancing at. */
+const TOAST_DURATION_MS_LONG = 6000;
 
 const ICONS = {
   success: CheckCircle2,
   error: AlertCircle,
+  warning: AlertTriangle,
   info: Info,
 } as const;
 
 const STYLES = {
   success: 'border-green-200 bg-green-50 text-green-800',
   error: 'border-red-200 bg-red-50 text-red-800',
+  warning: 'border-yellow-200 bg-yellow-50 text-yellow-800',
   info: 'border-gray-200 bg-white text-gray-800',
 } as const;
 
@@ -22,9 +26,10 @@ export function Toast({ toast }: { toast: ToastData }) {
   const Icon = ICONS[toast.type];
 
   useEffect(() => {
-    const timeout = setTimeout(() => removeToast(toast.id), TOAST_DURATION_MS);
+    const duration = toast.type === 'error' || toast.type === 'warning' ? TOAST_DURATION_MS_LONG : TOAST_DURATION_MS;
+    const timeout = setTimeout(() => removeToast(toast.id), duration);
     return () => clearTimeout(timeout);
-  }, [toast.id, removeToast]);
+  }, [toast.id, toast.type, removeToast]);
 
   return (
     <div
