@@ -13,6 +13,10 @@ const envSchema = z.object({
   REDIS_HOST: z.string().min(1).default('localhost'),
   REDIS_PORT: z.coerce.number().default(6379),
   REDIS_PASSWORD: z.string().optional(),
+  // Comma-separated emails granted access to /api/admin/*. Empty in development falls back to
+  // "whoever signed up first" (see routes/admin.ts's requireAdmin) so the dashboard is reachable
+  // without any setup; production should always set this explicitly.
+  ADMIN_EMAILS: z.string().optional().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);

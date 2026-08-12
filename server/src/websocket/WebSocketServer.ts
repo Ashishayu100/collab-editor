@@ -21,6 +21,7 @@ import { Role } from '@prisma/client';
 import { prisma } from '../config/database';
 import { DOCUMENT_LIMITS, REDIS_PUBLISH_LIMITS, WS_LIMITS } from '../config/limits';
 import { checkDocumentAccess } from '../services/document.service';
+import { MetricsService } from '../services/MetricsService';
 import { RedisDocumentTracker } from '../services/RedisDocumentTracker';
 import { RedisMessage, RedisPubSub } from '../services/RedisPubSub';
 import { createVersion, shouldAutoSnapshot } from '../services/versionService';
@@ -81,6 +82,7 @@ interface ClientConnection {
 
 interface DocumentRoom {
   docId: string;
+  title: string;
   ydoc: Y.Doc;
   awareness: Awareness;
   clients: Map<WebSocket, ClientConnection>;
@@ -116,6 +118,7 @@ export class CollabWebSocketServer {
   private idleSweepInterval: ReturnType<typeof setInterval>;
   private redisPubSub: RedisPubSub;
   private documentTracker: RedisDocumentTracker;
+  private metrics: MetricsService = MetricsService.getInstance();
 
   /** Concurrent open connections per IP — incremented on connect, decremented on disconnect. */
   private connectionsByIp: Map<string, number> = new Map();
@@ -379,6 +382,7 @@ export class CollabWebSocketServer {
       const { allowed, reason } = this.checkConnectionAllowed(ip);
       if (!allowed) {
         console.warn(`[WS] Rejecting connection from ${ip}: ${reason}`);
+        this.metrics.rateLimitHit();
         socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n');
         socket.destroy();
         return;
@@ -389,6 +393,8 @@ export class CollabWebSocketServer {
       });
     } catch (error) {
       console.error('[WS] Auth failed during upgrade:', error);
+      this.metrics.authFailure();
+      this.metrics.recordError('websocket', error instanceof Error ? error.message : 'Auth failed during upgrade', documentId);
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
     }
@@ -428,19 +434,22 @@ export class CollabWebSocketServer {
 
     const doc = await prisma.document.findUnique({
       where: { id: documentId },
-      select: { content: true },
+      select: { content: true, title: true },
     });
+    this.metrics.documentLoaded();
 
     if (doc?.content) {
       try {
         Y.applyUpdate(ydoc, new Uint8Array(doc.content));
       } catch (error) {
         console.error(`[WS] Failed to load existing state for document ${documentId}:`, error);
+        this.metrics.recordError('websocket', `Failed to load state for document ${documentId}`, documentId);
       }
     }
 
     const room: DocumentRoom = {
       docId: documentId,
+      title: doc?.title ?? 'Untitled Document',
       ydoc,
       awareness: new Awareness(ydoc),
       clients: new Map(),
@@ -469,6 +478,7 @@ export class CollabWebSocketServer {
       room.clients.forEach((_client, ws) => {
         if (ws !== origin && ws.readyState === WebSocket.OPEN) {
           ws.send(message);
+          this.metrics.messageSent();
         }
       });
 
@@ -509,6 +519,7 @@ export class CollabWebSocketServer {
         room.clients.forEach((_client, ws) => {
           if (ws !== origin && ws.readyState === WebSocket.OPEN) {
             ws.send(message);
+            this.metrics.messageSent();
           }
         });
 
@@ -521,6 +532,7 @@ export class CollabWebSocketServer {
     );
 
     this.rooms.set(documentId, room);
+    this.metrics.roomCreated();
 
     await this.redisPubSub.subscribe(documentId, (message) => this.handleRedisMessage(documentId, message));
 
@@ -596,6 +608,7 @@ export class CollabWebSocketServer {
     };
     room.clients.set(ws, client);
     this.registerConnection(ip);
+    this.metrics.connectionOpened(userId, documentId, room.title);
 
     void this.documentTracker.addActiveUser(documentId, userId, userName);
 
@@ -605,6 +618,7 @@ export class CollabWebSocketServer {
     encoding.writeVarUint(syncEncoder, MessageType.SYNC);
     writeSyncStep1(syncEncoder, room.ydoc);
     ws.send(encoding.toUint8Array(syncEncoder));
+    this.metrics.messageSent();
 
     // Bring the new client up to speed on everyone already present in the room.
     const existingClientIds = Array.from(room.awareness.getStates().keys());
@@ -613,6 +627,7 @@ export class CollabWebSocketServer {
       encoding.writeVarUint(awarenessEncoder, MessageType.AWARENESS);
       encoding.writeVarUint8Array(awarenessEncoder, encodeAwarenessUpdate(room.awareness, existingClientIds));
       ws.send(encoding.toUint8Array(awarenessEncoder));
+      this.metrics.messageSent();
     }
 
     ws.on('message', (data: ArrayBuffer) => {
@@ -627,13 +642,17 @@ export class CollabWebSocketServer {
       client.lastActivity = Date.now();
 
       if (!this.checkMessageRate(client)) {
+        this.metrics.rateLimitHit();
         return; // Soft-dropped (or the hard limit already closed the socket) — never reaches handleMessage.
       }
 
+      const startTime = performance.now();
       try {
         this.handleMessage(room, client, bytes);
+        this.metrics.recordMessageLatency(performance.now() - startTime);
       } catch (error) {
         console.error(`[WS] Error handling message from userId=${userId}:`, error);
+        this.metrics.recordError('websocket', error instanceof Error ? error.message : 'Error handling message', documentId);
         ws.close();
       }
     });
@@ -645,12 +664,14 @@ export class CollabWebSocketServer {
 
     ws.on('error', (error) => {
       console.error(`[WS] Socket error for userId=${userId}:`, error);
+      this.metrics.recordError('websocket', error.message, documentId);
     });
   }
 
   private handleMessage(room: DocumentRoom, client: ClientConnection, data: Uint8Array): void {
     const decoder = decoding.createDecoder(data);
     const messageType = decoding.readVarUint(decoder);
+    this.metrics.messageReceived(messageType, room.docId);
 
     switch (messageType) {
       case MessageType.SYNC: {
@@ -699,6 +720,7 @@ export class CollabWebSocketServer {
   private async handleDisconnect(room: DocumentRoom, ws: WebSocket, userId: string): Promise<void> {
     const client = room.clients.get(ws);
     room.clients.delete(ws);
+    this.metrics.connectionClosed(userId, room.docId);
 
     if (client && client.ownedClientIds.size > 0) {
       removeAwarenessStates(room.awareness, Array.from(client.ownedClientIds), null);
@@ -738,6 +760,7 @@ export class CollabWebSocketServer {
 
     if (this.rooms.get(room.docId) === room) {
       this.rooms.delete(room.docId);
+      this.metrics.roomDestroyed();
     }
     room.ydoc.destroy();
 
@@ -830,6 +853,7 @@ export class CollabWebSocketServer {
     room.clients.forEach((_client, ws) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(message);
+        this.metrics.messageSent();
       }
     });
 
@@ -855,6 +879,7 @@ export class CollabWebSocketServer {
         encoding.writeVarUint(encoder, MessageType.ROLE_UPDATED);
         encoding.writeVarString(encoder, newRole);
         ws.send(encoding.toUint8Array(encoder));
+        this.metrics.messageSent();
         notified = true;
       }
     });
@@ -878,6 +903,7 @@ export class CollabWebSocketServer {
         const encoder = encoding.createEncoder();
         encoding.writeVarUint(encoder, MessageType.ACCESS_REVOKED);
         ws.send(encoding.toUint8Array(encoder));
+        this.metrics.messageSent();
         ws.close(4001, 'Access revoked');
       }
     });
@@ -891,6 +917,7 @@ export class CollabWebSocketServer {
    */
   public broadcastCommentEvent(documentId: string, event: CommentEvent): boolean {
     const delivered = this.broadcastCommentEventToLocalClients(documentId, event);
+    this.metrics.commentEventBroadcast(documentId);
 
     this.redisPubSub.publishCommentEvent(documentId, event).catch((err) => {
       console.error(`[WS] Redis comment publish failed for doc ${documentId}:`, err);
@@ -914,6 +941,7 @@ export class CollabWebSocketServer {
     room.clients.forEach((_client, ws) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(message);
+        this.metrics.messageSent();
       }
     });
 
@@ -961,6 +989,7 @@ export class CollabWebSocketServer {
     }
 
     room.isSaving = true;
+    const saveStart = performance.now();
 
     try {
       const state = Buffer.from(Y.encodeStateAsUpdate(room.ydoc));
@@ -991,10 +1020,17 @@ export class CollabWebSocketServer {
       room.lastSavedStateVector = currentStateVector;
       room.consecutiveSaveFailures = 0;
       console.log(`[WS] Saved document ${room.docId} (${state.byteLength} bytes)`);
+      this.metrics.documentSaved();
+      this.metrics.recordDocumentSaveTime(performance.now() - saveStart);
       this.broadcastSaveConfirmed(room);
     } catch (error) {
       room.consecutiveSaveFailures++;
       console.error(`[WS] Failed to save document ${room.docId} (failure ${room.consecutiveSaveFailures}):`, error);
+      this.metrics.recordError(
+        'database',
+        error instanceof Error ? error.message : `Failed to save document ${room.docId}`,
+        room.docId
+      );
       if (room.consecutiveSaveFailures >= MAX_CONSECUTIVE_SAVE_FAILURES) {
         console.error(
           `[WS] CRITICAL: document ${room.docId} has failed to save ${room.consecutiveSaveFailures} consecutive times`
@@ -1014,8 +1050,20 @@ export class CollabWebSocketServer {
     room.clients.forEach((_client, ws) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(message);
+        this.metrics.messageSent();
       }
     });
+  }
+
+  /** Aggregated userIds across every live room — used by MetricsService.startPeriodicCleanup to
+   *  reconcile the active-user gauge against reality (a user with several tabs open on different
+   *  documents must only be dropped once none of their connections remain). */
+  public getConnectedUserIds(): Set<string> {
+    const userIds = new Set<string>();
+    this.rooms.forEach((room) => {
+      room.clients.forEach((client) => userIds.add(client.userId));
+    });
+    return userIds;
   }
 
   /** Save every room with unsaved changes. Used on process shutdown so nothing is lost. */

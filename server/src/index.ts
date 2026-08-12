@@ -2,6 +2,8 @@ import { createServer } from 'http';
 import { createApp } from './app';
 import { createRedisClient } from './config/redis';
 import { env } from './config/env';
+import { MetricsHistoryService } from './services/MetricsHistoryService';
+import { MetricsService } from './services/MetricsService';
 import { RedisDocumentTracker } from './services/RedisDocumentTracker';
 import { RedisPubSub } from './services/RedisPubSub';
 import { setDocumentTracker } from './services/documentTrackerRegistry';
@@ -32,6 +34,11 @@ const httpServer = createServer(app);
 const collabServer = new CollabWebSocketServer(httpServer, redisPubSub, documentTracker);
 setWebSocketServer(collabServer);
 
+const metrics = MetricsService.getInstance();
+metrics.setServerId(redisPubSub.getServerId());
+metrics.startPeriodicCleanup(() => collabServer.getConnectedUserIds());
+MetricsHistoryService.getInstance().start();
+
 httpServer.listen(env.PORT, () => {
   console.log(`Server listening on http://localhost:${env.PORT}`);
   console.log(`WebSocket server ready on ws://localhost:${env.PORT}/ws`);
@@ -51,6 +58,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
     process.exit(1);
   }, 10000);
   forceExitTimeout.unref();
+
+  MetricsHistoryService.getInstance().stop();
+  metrics.stopPeriodicCleanup();
 
   await collabServer.shutdown();
 

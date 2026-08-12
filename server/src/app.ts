@@ -5,8 +5,10 @@ import helmet from 'helmet';
 import { env } from './config/env';
 import { prisma } from './config/database';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { metricsMiddleware } from './middleware/metricsMiddleware';
 import { generalLimiter } from './middleware/rateLimiter';
 import { requestLogger } from './middleware/requestLogger';
+import adminRoutes from './routes/admin';
 import authRoutes from './routes/auth.routes';
 import documentRoutes from './routes/document.routes';
 import folderRoutes from './routes/folder.routes';
@@ -54,6 +56,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use('/api/documents/:id/export', express.json({ limit: '5mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger);
+  app.use('/api/', metricsMiddleware);
   app.use('/api/', (req, res, next) => (req.path === '/health' ? next() : generalLimiter(req, res, next)));
 
   app.get('/api/health', async (_req, res) => {
@@ -80,6 +83,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use('/api/documents', documentSharingRoutes);
   app.use('/api/share', shareAcceptRoutes);
   app.use('/api/folders', folderRoutes);
+  app.use('/api/admin', adminRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

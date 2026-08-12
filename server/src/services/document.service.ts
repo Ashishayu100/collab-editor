@@ -1,6 +1,7 @@
 import { Prisma, Role } from '@prisma/client';
 import { prisma } from '../config/database';
 import { DOCUMENT_LIMITS } from '../config/limits';
+import { MetricsService } from './MetricsService';
 import { ApiError } from '../utils/ApiError';
 import {
   createEmptyYDocState,
@@ -260,6 +261,7 @@ export async function getDocumentById(userId: string, documentId: string) {
       collaborators: { include: { user: { select: COLLABORATOR_USER_SELECT } } },
     },
   });
+  MetricsService.getInstance().documentLoaded();
 
   return {
     id: document.id,
@@ -329,6 +331,7 @@ export async function saveDocumentContent(userId: string, documentId: string, co
     data: { content: merged },
     select: { updatedAt: true },
   });
+  MetricsService.getInstance().documentSaved();
 
   return document;
 }

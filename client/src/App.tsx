@@ -4,6 +4,7 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { ToastContainer } from './components/ui/ToastContainer';
 import { useAuth } from './hooks/useAuth';
 import AcceptShareLink from './pages/AcceptShareLink';
+import AdminDashboard from './pages/AdminDashboard';
 import Dashboard from './pages/Dashboard';
 import DocumentEditor from './pages/DocumentEditor';
 import Login from './pages/Login';
@@ -37,6 +38,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <DocumentEditor />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
+              <AdminDashboard />
             </ProtectedRoute>
           }
         />
