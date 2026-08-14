@@ -2,10 +2,19 @@ node_modules/
 dist/
 build/
 .env
+.env.production
+.env.production.local
 !.env.example
+!.env.production.example
 *.log
 .DS_Store
 coverage/
+
+# AWS deployment runtime artifacts — created at the repo root on the EC2 host (where
+# /opt/collab-editor is the git clone itself) by deployment/aws/scripts/*.sh. Never belong in
+# the repo.
+/logs/
+/backups/
 
 # Prisma
 server/prisma/migrations/**/migration.sql.bak

@@ -1,0 +1,51 @@
+# Runs only the app containers — server + client. PostgreSQL and Redis are managed AWS services
+# (RDS + ElastiCache), configured via .env.production, not containers here. See ../../docker-
+# compose.yml (repo root) for the self-contained version that runs its own postgres/redis
+# containers, used for local Docker verification instead of AWS.
+#
+# The build context is /opt/collab-editor (i.e. the repo root once cloned onto the EC2 instance)
+# because server/Dockerfile and client/Dockerfile both COPY sibling workspace package.json files
+# (client/server/shared) — see those Dockerfiles' comments.
+
+services:
+  server:
+    build:
+      context: /opt/collab-editor
+      dockerfile: server/Dockerfile
+    container_name: collab-server
+    restart: always
+    env_file:
+      - /opt/collab-editor/.env.production
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    ports:
+      - "127.0.0.1:3001:3001"   # Only exposed to localhost — the host Nginx proxies external traffic.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  client:
+    build:
+      context: /opt/collab-editor
+      dockerfile: client/Dockerfile
+    container_name: collab-client
+    restart: always
+    ports:
+      - "127.0.0.1:8080:80"    # Only exposed to localhost — the host Nginx proxies external traffic.
+    depends_on:
+      server:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
