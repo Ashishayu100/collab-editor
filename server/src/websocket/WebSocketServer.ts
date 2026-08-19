@@ -19,6 +19,7 @@ import { WebSocket, WebSocketServer as WSServer } from 'ws';
 import * as Y from 'yjs';
 import { Role } from '@prisma/client';
 import { prisma } from '../config/database';
+import { env } from '../config/env';
 import { DOCUMENT_LIMITS, REDIS_PUBLISH_LIMITS, WS_LIMITS } from '../config/limits';
 import { checkDocumentAccess } from '../services/document.service';
 import { MetricsService } from '../services/MetricsService';
@@ -167,6 +168,12 @@ export class CollabWebSocketServer {
   /** Concurrent + rate limit check for a new WebSocket connection from a given IP, applied at
    *  upgrade time — before the socket is ever accepted. */
   private checkConnectionAllowed(ip: string): { allowed: boolean; reason?: string } {
+    // A load generator opens every connection from one IP, so both guards below would reject it
+    // almost immediately. See LOAD_TEST_MODE in config/env.ts.
+    if (env.LOAD_TEST_MODE) {
+      return { allowed: true };
+    }
+
     const concurrent = this.connectionsByIp.get(ip) ?? 0;
     if (concurrent >= WS_LIMITS.MAX_CONNECTIONS_PER_IP) {
       return { allowed: false, reason: `Too many concurrent connections from ${ip}` };

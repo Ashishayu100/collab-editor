@@ -17,6 +17,22 @@ const envSchema = z.object({
   // "whoever signed up first" (see routes/admin.ts's requireAdmin) so the dashboard is reachable
   // without any setup; production should always set this explicitly.
   ADMIN_EMAILS: z.string().optional().default(''),
+  // Opt-in escape hatch for load testing (see loadtest/README.md). Every rate limit in this app
+  // is keyed by IP or by user, and a load generator is a single IP creating throwaway users —
+  // so without this the auth limiter (10 attempts/15min per IP) and the per-IP WebSocket
+  // connection guards reject nearly every request and the run measures the rate limiter rather
+  // than the app. Disables the express-rate-limit middleware and the WS per-IP concurrency/rate
+  // checks; nothing else. Off unless set to the literal string "true".
+  // NEVER leave this on for a deployment exposed to the internet — it removes brute-force and
+  // connection-flood protection entirely.
+  // Deliberately permissive rather than a strict enum: only the exact string "true" enables it,
+  // and any other value (including a typo) falls back to the safe default instead of taking the
+  // whole server down at boot on a failed env parse.
+  LOAD_TEST_MODE: z
+    .string()
+    .optional()
+    .default('false')
+    .transform((value) => value.trim().toLowerCase() === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

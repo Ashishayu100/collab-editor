@@ -39,6 +39,13 @@ metrics.setServerId(redisPubSub.getServerId());
 metrics.startPeriodicCleanup(() => collabServer.getConnectedUserIds());
 MetricsHistoryService.getInstance().start();
 
+if (env.LOAD_TEST_MODE) {
+  console.warn(
+    '[Server] LOAD_TEST_MODE=true — HTTP rate limiting and per-IP WebSocket connection guards are DISABLED. ' +
+      'Intended only for k6 runs against a throwaway environment (see loadtest/README.md). Never leave this on.'
+  );
+}
+
 httpServer.listen(env.PORT, () => {
   console.log(`Server listening on http://localhost:${env.PORT}`);
   console.log(`WebSocket server ready on ws://localhost:${env.PORT}/ws`);

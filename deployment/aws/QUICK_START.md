@@ -15,7 +15,7 @@ See `SETUP.md` for full details:
 ```bash
 ssh -i your-key.pem ubuntu@YOUR_EC2_IP
 
-curl -O https://raw.githubusercontent.com/YOUR_REPO/main/deployment/aws/setup-ec2.sh
+curl -O https://raw.githubusercontent.com/Ashishayu100/collab-editor/master/deployment/aws/setup-ec2.sh
 chmod +x setup-ec2.sh
 ./setup-ec2.sh
 
@@ -27,7 +27,7 @@ ssh -i your-key.pem ubuntu@YOUR_EC2_IP
 ### 3. Clone Repo and Configure
 
 ```bash
-git clone YOUR_REPO_URL /opt/collab-editor
+git clone https://github.com/Ashishayu100/collab-editor.git /opt/collab-editor
 cd /opt/collab-editor
 
 cp deployment/aws/.env.production.example .env.production

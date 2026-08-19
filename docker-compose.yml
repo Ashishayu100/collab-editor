@@ -59,6 +59,9 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-in-production-refresh-secret}
       CLIENT_URL: ${CLIENT_URL:-http://localhost}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # Only ever set to "true" while running the k6 scripts in loadtest/ — it disables rate
+      # limiting and the per-IP WebSocket guards. See loadtest/README.md.
+      LOAD_TEST_MODE: ${LOAD_TEST_MODE:-false}
     ports:
       - "3001:3001"
     depends_on:

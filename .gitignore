@@ -16,6 +16,10 @@ coverage/
 /logs/
 /backups/
 
+# k6 run output — the scripts are committed, the results of any given run are not.
+loadtest/results/*
+!loadtest/results/.gitkeep
+
 # Prisma
 server/prisma/migrations/**/migration.sql.bak
 

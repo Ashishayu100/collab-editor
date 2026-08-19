@@ -1,6 +1,7 @@
 import rateLimit, { ipKeyGenerator, RateLimitRequestHandler } from 'express-rate-limit';
 import { Request } from 'express';
 import RedisStore, { RedisReply } from 'rate-limit-redis';
+import { env } from '../config/env';
 import { createRateLimitRedisClient } from '../config/redis';
 
 // A dedicated connection for the rate-limit counters — kept separate from the pub/sub and
@@ -35,6 +36,9 @@ const sharedOptions = {
   // Redis is a scaling nicety here too — if it's unreachable, fail OPEN (let the request
   // through) rather than 500ing every API call or blocking on a hung store call.
   passOnStoreError: true,
+  // Load-test runs come from one IP and would otherwise be rejected by the auth limiter within
+  // seconds, measuring the limiter instead of the app. See LOAD_TEST_MODE in config/env.ts.
+  skip: () => env.LOAD_TEST_MODE,
 };
 
 /** General API guard: 100 requests/minute per user (or IP pre-auth). Applied to all of /api/. */
