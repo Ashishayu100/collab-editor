@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 300" width="1280" height="300" role="img" aria-label="CollabEdit — a collaborative document editor built from scratch on CRDTs">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1120"/>
+      <stop offset="55%" stop-color="#111a33"/>
+      <stop offset="100%" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0ea5e9" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <clipPath id="panel">
+      <rect x="0" y="0" width="1280" height="300" rx="18"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#panel)">
+    <rect x="0" y="0" width="1280" height="300" fill="url(#bg)"/>
+    <circle cx="1030" cy="40" r="300" fill="url(#glow)"/>
+    <circle cx="180" cy="300" r="240" fill="url(#glow2)"/>
+
+    <text x="80" y="80" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="600" letter-spacing="3.5" fill="#818cf8">REAL-TIME &#183; OFFLINE-FIRST &#183; HORIZONTALLY SCALABLE</text>
+
+    <text x="78" y="150" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="62" font-weight="700" letter-spacing="-1.5" fill="#f8fafc">CollabEdit</text>
+
+    <text x="80" y="190" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="21" fill="#94a3b8">A collaborative document editor built from scratch on CRDTs.</text>
+
+    <rect x="80" y="212" width="116" height="32" rx="16" fill="#1e293b" fill-opacity="0.9" stroke="#3b4a63"/>
+    <text x="138" y="233" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#cbd5e1" text-anchor="middle">Yjs CRDTs</text>
+
+    <rect x="206" y="212" width="242" height="32" rx="16" fill="#1e293b" fill-opacity="0.9" stroke="#3b4a63"/>
+    <text x="327" y="233" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#cbd5e1" text-anchor="middle">Custom binary WebSocket protocol</text>
+
+    <rect x="458" y="212" width="140" height="32" rx="16" fill="#1e293b" fill-opacity="0.9" stroke="#3b4a63"/>
+    <text x="528" y="233" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="500" fill="#cbd5e1" text-anchor="middle">Redis pub/sub</text>
+
+    <rect x="750" y="52" width="450" height="196" rx="14" fill="#0f172a" fill-opacity="0.92" stroke="#334155"/>
+
+    <circle cx="776" cy="76" r="4.5" fill="#f87171"/>
+    <circle cx="794" cy="76" r="4.5" fill="#fbbf24"/>
+    <circle cx="812" cy="76" r="4.5" fill="#34d399"/>
+    <line x1="766" y1="95" x2="1184" y2="95" stroke="#1e293b" stroke-width="1.5"/>
+
+    <rect x="776" y="112" width="340" height="11" rx="5.5" fill="#334155"/>
+    <rect x="776" y="134" width="395" height="11" rx="5.5" fill="#334155"/>
+    <rect x="776" y="156" width="250" height="11" rx="5.5" fill="#3f4d63"/>
+    <rect x="776" y="178" width="365" height="11" rx="5.5" fill="#334155"/>
+    <rect x="776" y="200" width="195" height="11" rx="5.5" fill="#3f4d63"/>
+
+    <line x1="1034" y1="149" x2="1034" y2="174" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round"/>
+    <rect x="1042" y="147" width="54" height="20" rx="6" fill="#38bdf8"/>
+    <text x="1069" y="161" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#082f49" text-anchor="middle">Alice</text>
+
+    <line x1="979" y1="193" x2="979" y2="218" stroke="#fb7185" stroke-width="2.5" stroke-linecap="round"/>
+    <rect x="987" y="191" width="46" height="20" rx="6" fill="#fb7185"/>
+    <text x="1010" y="205" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#4c0519" text-anchor="middle">Bob</text>
+
+    <rect x="0" y="296" width="1280" height="4" fill="url(#accent)"/>
+  </g>
+</svg>
